@@ -1,0 +1,26 @@
+# Copyrighted book and any other PDFs
+*.pdf
+
+# Dependencies
+node_modules/
+
+# OS and editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.vscode/
+.idea/
+
+# Scratch output not needed to rebuild
+*.tmp
+*.log
+*.dmp
+study-work/browser-qa/
+study-work/browser-qa-edge/
+study-work/transfers/
+study-work/transfer-current/
+hive-study/.openai/
+study-work/site-source/
+hive-study/.git-empty-unused/
