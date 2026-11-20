@@ -32,4 +32,6 @@ The overall pass count is now 7 steps instead of 6. Step `e` runs before `d` and
 | Check | Result |
 |---|---|
 | `node study-work/browser-check.cjs` (local) | ALL PASS 7/7, 0 console errors, 0 uncaught exceptions |
-| `node study-work/browser-check.cjs --live` | see below |
+| `node study-work/browser-check.cjs --live` | ALL PASS 7/7, 0 console errors, 0 uncaught exceptions. Step `e`: scrollY 756 to 0, board top 282, bottom 682 of 900 |
+
+Published in commit `9adbfc1`. `pages/builds/latest` read `built` for `9adbfc1cf67c052d701f5aba534451daadd6fc75` (about 53 s, no error, 2026-11-20T14:05:53Z). The live check ran after that build.
