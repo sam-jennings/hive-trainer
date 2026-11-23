@@ -33,13 +33,18 @@ main{max-width:1312px;margin:0 auto;padding:37px clamp(22px,4.3vw,68px) 48px;out
 
 .turn-pill b.black-token{background:#222b28;border:1px solid #b7cab6}
 .reply-note{border-bottom:1px solid var(--line);padding:8px 0}.reply-note summary{cursor:pointer;font-weight:600;font-size:15px}.reply-note p{margin-top:6px}
+.seg{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}.seg .btn{margin-top:0;min-height:36px;padding:6px 12px;font-size:14px}.seg .btn[aria-pressed="true"]{background:var(--sage);border-color:#87a58b;color:#22432f}
+.game-over{display:flex;align-items:flex-start;gap:6px;flex-wrap:wrap;font-size:15px}.last-move{margin-top:10px}
+.game-settings{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}.game-settings .subtle-label+.seg{margin-bottom:10px}
+.exp-choices{display:grid;gap:6px;margin:8px 0 4px}.exp-choice{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:14px;line-height:1.3}.exp-choice input{margin-top:5px;width:16px;height:16px;flex:none;cursor:pointer}.exp-choice svg{flex:none}.exp-choice small{display:block;color:var(--muted,#5d6a60);font-size:12.5px}.exp-choice:has(input:checked){background:#eef3e6;border-color:#87a58b}.exp-choice:focus-within{outline:2px solid #87a58b;outline-offset:1px}
+.exp-tag{font-style:normal;font-size:11px;font-weight:600;margin-left:6px;padding:1px 6px;border-radius:9px;background:#e7defa;color:#4b3b78}
 </style>
  
 </head>
 <body><a class="skip" href="#main">Skip to training</a>
 <header class="site-head"><div class="head-inner">
  <a class="brand" href="#practice" aria-label="Hive Study home"><span id="mark"></span>Hive Study</a>
- <nav aria-label="Main navigation"><a href="#practice" data-nav="practice"><i data-icon="board"></i>Practice</a><a href="#openers" data-nav="openers"><i data-icon="target"></i>Openers</a><a href="#guide" data-nav="guide"><i data-icon="book"></i>Field guide</a><a href="#progress" data-nav="progress"><i data-icon="chart"></i>Progress</a></nav>
+ <nav aria-label="Main navigation"><a href="#practice" data-nav="practice"><i data-icon="board"></i>Practice</a><a href="#openers" data-nav="openers"><i data-icon="target"></i>Openers</a><a href="#play" data-nav="play"><i data-icon="surround"></i>Play</a><a href="#guide" data-nav="guide"><i data-icon="book"></i>Field guide</a><a href="#progress" data-nav="progress"><i data-icon="chart"></i>Progress</a></nav>
  <div class="edition"><span class="edition-hex">⬡</span> <span id="editionLabel">Base game</span></div>
 </div></header>
 <main id="main" tabindex="-1"></main>
@@ -47,10 +52,21 @@ main{max-width:1312px;margin:0 auto;padding:37px clamp(22px,4.3vw,68px) 48px;out
 <div id="announce" class="sr" role="status" aria-live="polite"></div>
 <script>
 // Axial coordinates. Each occupied cell holds a stack, bottom piece first.
+// Expansion pieces (Mosquito M, Ladybug L, Pillbug P) are OPT-IN: pass an options object
+// { expansions: ["M","L","P"] (or a subset), last: <previous move {id,from,to}> } as the last
+// argument of moves / destinations / available / abilities. Without it (or with an empty list)
+// every function behaves exactly as the base game. See hive-study/EXPANSIONS-NOTES.md.
 const HiveRules = (() => {
   const dirs = [[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]];
   const stock = {Q:1, A:3, B:2, G:3, S:2};
   const names = {Q:"Queen", A:"Ant", B:"Beetle", G:"Grasshopper", S:"Spider"};
+  const expansionStock = {M:1, L:1, P:1};
+  const expansionNames = {M:"Mosquito", L:"Ladybug", P:"Pillbug"};
+  const enabled = (opts,kind) => !!opts && Array.isArray(opts.expansions) && opts.expansions.includes(kind) && kind in expansionStock;
+  const anyEnabled = opts => !!opts && Array.isArray(opts.expansions) && opts.expansions.some(k => k in expansionStock);
+  // Gen4: a piece that physically moved on the previous turn (directly or by a pillbug) cannot move,
+  // be moved by a pillbug, or use its ability this turn. A placement is not a move, so it does not freeze.
+  const frozen = (opts,id) => anyEnabled(opts) && !!opts.last && !!opts.last.from && opts.last.id === id;
   const neighborCache = new Map();
   const neighbors = cell => {
     if (neighborCache.has(cell)) return neighborCache.get(cell);
@@ -86,13 +102,18 @@ const HiveRules = (() => {
     }
     return next;
   }
-  function destinations(board,cell) {
-    const id=top(board,cell);
-    if (!id || !locate(board,id[0]+"Q1")) return [];
-    const b=lift(board,cell);
-    if (!connected(b)) return [];
-    if (id[1]==="Q") return steps(b,cell);
-    if (id[1]==="G") {
+  // One beetle-style step from `cell` in direction i on board b (mover already lifted): the mover
+  // sits at height b[cell].length; blocked when both flanking stacks are higher than both ends.
+  function climbOk(b,cell,i) {
+    const n = at(cell,i);
+    const height = Math.max(b[cell]?.length||0,b[n]?.length||0);
+    const left = b[at(cell,i-1)]?.length||0, right=b[at(cell,i+1)]?.length||0;
+    return (height>0 || left+right>0) && Math.min(left,right)<=height;
+  }
+  // Movement of a base kind from `cell` on the lifted board b (the original base-game code).
+  function baseDestinations(b,cell,kind) {
+    if (kind==="Q") return steps(b,cell);
+    if (kind==="G") {
       const land=[];
       for(let i=0;i<6;i++) {
         let n=at(cell,i);
@@ -102,14 +123,8 @@ const HiveRules = (() => {
       }
       return land;
     }
-    if (id[1]==="B") {
-      return neighbors(cell).filter((n,i)=>{
-        const height = Math.max(b[cell]?.length||0,b[n]?.length||0);
-        const left = b[at(cell,i-1)]?.length||0, right=b[at(cell,i+1)]?.length||0;
-        return (height>0 || left+right>0) && Math.min(left,right)<=height;
-      });
-    }
-    if (id[1]==="S") {
+    if (kind==="B") return neighbors(cell).filter((n,i)=>climbOk(b,cell,i));
+    if (kind==="S") {
       const end=new Set();
       function walk(path) {
         if(path.length===4) { end.add(path[3]); return; }
@@ -123,6 +138,67 @@ const HiveRules = (() => {
     seen.delete(cell);
     return [...seen];
   }
+  // Ladybug: exactly 2 steps on top of the hive, then 1 step down into an empty cell
+  // (freedom to move at height applies to each step); it may not end where it started.
+  function ladybug(b,cell) {
+    const end=new Set();
+    neighbors(cell).forEach((a,i)=>{
+      if(!b[a] || !climbOk(b,cell,i)) return;
+      neighbors(a).forEach((c,j)=>{
+        if(!b[c] || !climbOk(b,a,j)) return;
+        neighbors(c).forEach((d,k)=>{ if(!b[d] && d!==cell && climbOk(b,c,k)) end.add(d); });
+      });
+    });
+    return [...end];
+  }
+  // Movement of any kind, including enabled expansion kinds. `board` is the full board, b the lifted one.
+  function kindDestinations(board,b,cell,kind,opts) {
+    if (kind==="L" && enabled(opts,"L")) return ladybug(b,cell);
+    if (kind==="P" && enabled(opts,"P")) return steps(b,cell);
+    if (kind==="M" && enabled(opts,"M")) {
+      // On top of the hive the mosquito moves only as a beetle.
+      if (board[cell].length>1) return baseDestinations(b,cell,"B");
+      // On the ground it copies the top piece of each adjacent stack; copying a mosquito gives nothing.
+      const copied=new Set(neighbors(cell).map(n=>top(board,n)).filter(Boolean).map(t=>t[1]).filter(k=>k!=="M"));
+      const out=new Set();
+      for (const k of copied) for (const d of kindDestinations(board,b,cell,k,opts)) out.add(d);
+      return [...out];
+    }
+    return baseDestinations(b,cell,kind);
+  }
+  function destinations(board,cell,opts) {
+    const id=top(board,cell);
+    if (!id || !locate(board,id[0]+"Q1")) return [];
+    if (frozen(opts,id)) return [];
+    const b=lift(board,cell);
+    if (!connected(b)) return [];
+    if (!anyEnabled(opts)) return baseDestinations(b,cell,id[1]);
+    return kindDestinations(board,b,cell,id[1],opts);
+  }
+  // Pillbug special ability (also a ground mosquito touching a pillbug): move an adjacent unstacked
+  // piece up onto the pillbug and down into an empty cell next to it. Returns moves {id,from,to,by}.
+  // The pillbug itself need not be free to move (One Hive applies to the moved piece only), but it
+  // must not be covered, not have moved last turn, and its owner's queen must be on the board.
+  function abilities(board,cell,opts) {
+    if (!enabled(opts,"P")) return [];
+    const id=top(board,cell);
+    if (!id || board[cell].length!==1 || !locate(board,id[0]+"Q1") || frozen(opts,id)) return [];
+    const isPillbug = id[1]==="P" || (id[1]==="M" && enabled(opts,"M") && neighbors(cell).some(n=>top(board,n)?.[1]==="P"));
+    if (!isPillbug) return [];
+    const out=[];
+    neighbors(cell).forEach((from,i)=>{
+      const stack=board[from];
+      if (!stack || stack.length!==1 || frozen(opts,stack[0])) return;
+      const b=lift(board,from);
+      if (!connected(b)) return;
+      if (!climbOk(b,from,(i+3)%6)) return;          // up onto the pillbug (no gate of stacks)
+      neighbors(cell).forEach((to,k)=>{
+        if (b[to] || to===from || !climbOk(b,cell,k)) return;   // down into an empty cell
+        out.push({id:stack[0],from,to,by:id});
+      });
+    });
+    return out;
+  }
   function placements(board,side) {
     const cells=Object.keys(board);
     if(!cells.length) return ["0,0"];
@@ -130,20 +206,32 @@ const HiveRules = (() => {
     if(cells.length===1) return [...edge];
     return [...edge].filter(n=>neighbors(n).every(k=>!board[k]||top(board,k)[0]===side));
   }
-  function available(board,side,ply) {
+  function available(board,side,ply,opts) {
     const ids=pieces(board);
     const mustQueen=Math.floor(ply/2)>=3&&!ids.includes(side+"Q1");
-    return Object.entries(stock).flatMap(([kind,count])=>{
+    const kinds=anyEnabled(opts) ? {...stock, ...Object.fromEntries(Object.entries(expansionStock).filter(([k])=>enabled(opts,k)))} : stock;
+    return Object.entries(kinds).flatMap(([kind,count])=>{
       const next=ids.filter(id=>id.startsWith(side+kind)).length+1;
       return next>count || (mustQueen && kind!=="Q") ? [] : [side+kind+next];
     });
   }
-  function moves(board,side,ply) {
+  function moves(board,side,ply,opts) {
     const drops=placements(board,side);
-    const all=available(board,side,ply).flatMap(id=>drops.map(to=>({id,from:null,to})));
+    const all=available(board,side,ply,opts).flatMap(id=>drops.map(to=>({id,from:null,to})));
     for(const from of Object.keys(board)) {
       const id=top(board,from);
-      if(id[0]===side) for(const to of destinations(board,from)) all.push({id,from,to});
+      if(id[0]===side) for(const to of destinations(board,from,opts)) all.push({id,from,to});
+    }
+    if (enabled(opts,"P")) {
+      // Ability moves that give the same board as a move already listed are left out.
+      const seen=new Set(all.filter(m=>m.from).map(m=>m.id+"|"+m.from+"|"+m.to));
+      for(const cell of Object.keys(board)) {
+        if(top(board,cell)[0]!==side) continue;
+        for(const m of abilities(board,cell,opts)) {
+          const k=m.id+"|"+m.from+"|"+m.to;
+          if(!seen.has(k)) { seen.add(k); all.push(m); }
+        }
+      }
     }
     return all;
   }
@@ -160,9 +248,196 @@ const HiveRules = (() => {
     const white=surrounded("w"), black=surrounded("b");
     return white&&black ? "draw" : white ? "b" : black ? "w" : null;
   }
-  return {at,neighbors,top,stock,names,pieces,locate,ring,lift,connected,destinations,placements,available,moves,play,outcome};
+  return {at,neighbors,top,stock,names,expansionStock,expansionNames,pieces,locate,ring,lift,connected,destinations,abilities,placements,available,moves,play,outcome};
 })();
 if(typeof module!=="undefined") module.exports=HiveRules;
+
+// Computer opponent. It has no rules logic of its own: the legal moves, playing a move and the game
+// result all come from rules.js (HiveRules.moves / play / outcome / locate / ring / connected / lift).
+// This file only scores the positions rules.js produces and picks one of the moves rules.js lists.
+// choose() returns null when rules.js lists no move: the computer must pass.
+const HiveAI = (() => {
+  const R = typeof HiveRules !== "undefined" ? HiveRules : require("./rules.js");
+  const other = side => side === "w" ? "b" : "w";
+  const WIN = 100000, DRAW = -20;
+  // Value of N occupied cells around a queen (6 is a win, scored separately).
+  const SURROUND = [0, 2, 5, 10, 18, 32, 0];
+  // Rough worth of an unpinned piece of each kind (a pinned piece is worth nothing for mobility).
+  // M, L, P are only used when the game has expansion pieces (opts.rules.expansions).
+  const VALUE = { Q: 3, A: 5, B: 4, G: 2, S: 2, M: 4, L: 3, P: 3 };
+  // Rules options for the position after move m (expansions: m becomes the "last move"; that
+  // freezes the moved piece for the reply). Undefined for a base game, so rules.js runs unchanged.
+  const nextRules = (rules, m) => rules && { ...rules, last: m };
+  // Rules options for heuristics only (no freeze), or undefined for a base game.
+  const pieceRules = rules => rules && { expansions: rules.expansions };
+  const levels = [
+    { id: "easy", name: "Easy", about: "Random legal moves. Takes a win when it sees one." },
+    { id: "medium", name: "Medium", about: "Looks one move ahead and avoids handing you an instant win." },
+    { id: "hard", name: "Hard", about: "Looks two moves ahead: its move and your best reply." }
+  ];
+  // Seeded random numbers (mulberry32), so self-play runs can be repeated exactly.
+  function rng(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const pick = (list, rand) => list[Math.floor(rand() * list.length)];
+  const REPEAT = 6;
+  const key = b => Object.keys(b).sort().map(k => k + ":" + b[k].join("")).join("|");
+  const dist = (a, b) => {
+    const [q1, r1] = a.split(",").map(Number), [q2, r2] = b.split(",").map(Number);
+    return (Math.abs(q1 - q2) + Math.abs(r1 - r2) + Math.abs(q1 + r1 - q2 - r2)) / 2;
+  };
+
+  // Empty cells around the queen at `qc` that `att` can fill with a piece from OUTSIDE the ring
+  // (a ring piece stepping in reopens its own cell). Uses rules.js destinations / placements only.
+  // Checks only pieces that could plausibly reach a gap, so it stays cheap enough for leaf scoring.
+  function finishers(b, att, qc, rules) {
+    const ringCells = R.neighbors(qc), gaps = ringCells.filter(n => !b[n]);
+    const hit = new Set();
+    const extra = rules ? Object.keys(R.expansionStock || {}).filter(k => (rules.expansions || []).includes(k)).length : 0;
+    const inHand = R.pieces(b).filter(id => id[0] === att).length < 11 + extra;
+    if (inHand) { const drops = R.placements(b, att); for (const g of gaps) if (drops.includes(g)) hit.add(g); }
+    for (const cell of Object.keys(b)) {
+      const id = R.top(b, cell);
+      // A ring piece stepping in reopens its own cell, unless it is a beetle on top of a stack
+      // (or on the queen itself).
+      if (id[0] !== att || (ringCells.includes(cell) && b[cell].length === 1)) continue;
+      const near = Math.min(...gaps.map(g => dist(cell, g)));
+      const kind = id[1];
+      if ((kind === "Q" || kind === "B") && near > 1) continue;
+      if (kind === "S" && near > 3) continue;
+      if (kind === "G" && !gaps.some(g => { const [a, c] = cell.split(",").map(Number), [x, y] = g.split(",").map(Number); return a === x || c === y || a + c === x + y; })) continue;
+      for (const to of R.destinations(b, cell, pieceRules(rules))) if (gaps.includes(to)) hit.add(to);
+      if (hit.size === gaps.length) break;
+    }
+    return hit.size;
+  }
+
+  // Score a position for `side`: higher is better. Uses only rules.js queries.
+  // `toMove` (optional) is the side whose turn it is in `b`; it decides how much a finishing
+  // threat is worth (a threat for the side to move is a win next move).
+  function evaluate(b, side, toMove, rules) {
+    const res = R.outcome(b), opp = other(side);
+    if (res === side) return WIN;
+    if (res === opp) return -WIN;
+    if (res === "draw") return DRAW;
+    const mine = R.locate(b, side + "Q1"), theirs = R.locate(b, opp + "Q1");
+    let s = 0;
+    if (theirs) s += 3 * SURROUND[R.ring(b, theirs)];
+    if (mine) s -= 3.3 * SURROUND[R.ring(b, mine)];
+    // Finishing threats: a queen on 5 (or 4) neighbours only matters if the attacker can actually get
+    // a piece from outside the ring into a gap. Without this the attacker sits at 5 and shuffles.
+    for (const [qc, att, sign] of [[theirs, side, 1], [mine, opp, -1]]) {
+      if (!qc) continue;
+      const n = R.ring(b, qc);
+      if (n < 4) continue;
+      const f = finishers(b, att, qc, rules);
+      if (!f) continue;
+      if (n === 5) s += sign * (toMove === att ? WIN / 2 : 60);
+      else s += sign * (f >= 2 ? (toMove === att ? 40 : 15) : 6);
+    }
+    for (const cell of Object.keys(b)) {
+      const stack = b[cell], id = stack.at(-1), own = id[0] === side, sign = own ? 1 : -1;
+      const enemyQueen = own ? theirs : mine;
+      // Pinned pieces: lifting them would split the hive (rules.js connected/lift).
+      const free = R.connected(R.lift(b, cell));
+      if (free) s += sign * 0.6 * VALUE[id[1]];
+      if (id[1] === "B" && stack.length > 1) {
+        s += sign * 2;
+        if (stack.includes((own ? opp : side) + "Q1")) s += sign * 12;
+      }
+      // Pull free movers toward the enemy queen, so a piece is on hand to fill the last gap.
+      // Ants reach anywhere, so they are pulled gently; beetles, spiders and queens need to be close.
+      if (enemyQueen && free && id[1] !== "G") {
+        const d = dist(cell, enemyQueen);
+        if (d > 1) s += sign * (id[1] === "A" ? 0.8 : 1) * Math.max(0, 5 - d);
+        // A beetle on top of a stack in the ring keeps the ring filled when it steps into a gap.
+        else if (d === 1 && stack.length > 1) s += sign * 5;
+      }
+    }
+    return s;
+  }
+
+  // Does `side` have a move that wins on the spot?
+  function hasWin(b, side, ply, rules) {
+    return R.moves(b, side, ply, rules).some(m => R.outcome(R.play(b, m)) === side);
+  }
+
+  // Pick a move for `side` to play at `ply`. Options: rand (0..1 function), timeMs (wall-clock cap
+  // for the search), maxNodes (cap on positions scored; deterministic, used by self-play),
+  // rules (optional rules.js options for expansion games: { expansions, last }; omit for the base game).
+  function choose(board, side, ply, level = "medium", opts = {}) {
+    const rand = opts.rand || Math.random, timeMs = opts.timeMs ?? 700, maxNodes = opts.maxNodes ?? 4000;
+    const rules = opts.rules, pr = pieceRules(rules);
+    const t0 = Date.now(), opp = other(side);
+    let nodes = 0;
+    const out = () => Date.now() - t0 > timeMs || nodes > maxNodes;
+    const legal = R.moves(board, side, ply, rules);
+    if (!legal.length) return null;
+    const after = legal.map(m => ({ m, b: R.play(board, m) }));
+    const win = after.find(x => R.outcome(x.b) === side);
+    if (win) return win.m;
+
+    if (level === "easy") {
+      // Random, but skip moves that lose or draw at once, and avoid crowding its own queen.
+      const queen = R.locate(board, side + "Q1");
+      const ok = after.filter(x => !R.outcome(x.b));
+      const calm = ok.filter(x => !(queen && x.m.id[1] !== "Q" && R.neighbors(queen).includes(x.m.to)));
+      return pick(calm.length ? calm : ok.length ? ok : after, rand).m;
+    }
+
+    // One move ahead: score every reply-free position, with a little noise so games vary.
+    // (The opponent is to move in these positions, so a finisher left for them scores -WIN/2.)
+    const noise = level === "hard" ? 0.5 : 2;
+    // opts.history: earlier boards of this game. Going back to one costs a little per repeat, so a
+    // side with nothing better to do tries something new instead of shuffling one piece forever.
+    const seen = new Map();
+    for (const h of opts.history || []) { const k = key(h); seen.set(k, (seen.get(k) || 0) + 1); }
+    const scored = after.map(x => ({ ...x, v: evaluate(x.b, side, opp, pr), n: (rand() - 0.5) * noise - REPEAT * (seen.get(key(x.b)) || 0) }));
+    nodes += scored.length;
+    scored.sort((a, b) => (b.v + b.n) - (a.v + a.n));
+
+    if (level === "medium") {
+      // Take the best-scoring move that does not give the opponent an immediate win.
+      // Checks up to 8 candidates, more when the opponent is threatening (a queen on 5).
+      const threat = (q => q && R.ring(board, q) >= 5)(R.locate(board, side + "Q1"));
+      for (const x of scored.slice(0, threat ? 40 : 8)) {
+        if (out() && x !== scored[0]) break;
+        nodes += 1;
+        if (!hasWin(x.b, opp, ply + 1, nextRules(rules, x.m))) return x.m;
+      }
+      return scored[0].m;
+    }
+
+    // Hard: two moves ahead (its move, then the opponent's best reply), best first, alpha cut-off,
+    // stopped by the time/node cap. The first candidate is always searched completely.
+    // Leaves have Hard to move, so a finisher it still holds there counts as nearly a win (mate-in-2).
+    let best = null, bestV = -Infinity;
+    for (const x of scored) {
+      if (best && out()) break;
+      const replies = R.moves(x.b, opp, ply + 1, nextRules(rules, x.m));
+      let worst = Infinity;
+      if (!replies.length) { worst = evaluate(x.b, side, side, pr); nodes++; }
+      for (const r of replies) {
+        const v = evaluate(R.play(x.b, r), side, side, pr);
+        nodes++;
+        if (v < worst) worst = v;
+        if (worst + x.n <= bestV) break;
+      }
+      if (worst + x.n > bestV) { bestV = worst + x.n; best = x.m; }
+    }
+    return best;
+  }
+
+  return { levels, choose, evaluate, rng };
+})();
+if (typeof module !== "undefined") module.exports = HiveAI;
 
 const Positions = {"pin1":{"h":[["wG1","0,0"],["bS1","1,0"],["wQ1","0,-1"],["bQ1","1,1"],["wA1","-1,-1"],["bA1","2,1"],["wB1","-1,0"],["bG1","2,0"],["wS1","0,-2"],["bB1","0,2"]],"target":"bA1"},"def1":{"h":[["wA1","0,0"],["bA1","0,-1"],["wQ1","1,0"],["bQ1","-1,-1"],["wQ1","1,-1"],["bB1","0,-2"],["wB1","-1,1"],["bQ1","-1,-2"],["wS1","-2,1"],["bG1","-1,-3"],["wB2","0,1"],["bG2","-2,-3"],["wG1","-2,0"],["bA2","-2,-4"],["wS2","-1,2"],["bA2","2,-2"],["wG2","0,2"],["bA2","1,-3"],["wG3","-3,0"],["bB2","-2,-4"],["wA2","2,-1"],["bS1","1,-4"],["wA3","2,0"],["bS2","-3,-2"],["wA3","2,-4"],["bA3","-2,-2"],["wB2","-1,2"],["bA3","1,-2"],["wA2","-2,-2"],["bS1","-1,-4"]]},"def3":{"h":[["wG1","0,0"],["bA1","-1,0"],["wQ1","1,0"],["bB1","-2,1"],["wS1","2,-1"],["bB2","-3,1"],["wB1","3,-1"],["bQ1","-2,2"],["wA1","3,-2"],["bS1","-3,2"],["wG2","0,1"],["bG1","-3,3"],["wS2","4,-3"],["bS2","-4,3"],["wB1","2,0"],["bA2","-5,3"],["wA2","1,1"],["bB2","-2,1"]],"target":"bA2"},"def2":{"h":[["wB1","0,0"],["bB1","1,0"],["wQ1","0,-1"],["bA1","1,1"],["wA1","-1,0"],["bG1","1,2"],["wG1","-1,1"],["bQ1","0,3"],["wS1","-2,2"],["bS1","2,2"],["wA2","-2,3"],["bA2","0,4"],["wA2","-1,4"],["bG2","3,1"],["wG2","0,-2"],["bB2","3,2"],["wA2","4,0"],["bG3","2,3"],["wA1","-1,3"],["bA3","1,4"],["wA3","-2,3"],["bA1","-3,3"],["wA2","0,2"],["bA1","1,5"],["wS2","-3,2"],["bB1","1,-1"],["wB2","0,1"],["bB1","0,-1"],["wG3","-1,2"],["bA1","1,-1"],["wA1","-4,2"],["bB1","1,-2"]]},"win1":{"h":[["wA1","0,0"],["bB1","0,1"],["wA2","1,-1"],["bB2","-1,2"],["wS1","0,-1"],["bQ1","0,2"],["wQ1","2,-1"],["bG1","0,3"],["wA3","2,-2"],["bG2","1,2"],["wG1","3,-1"],["bA1","2,2"],["wA3","3,2"],["bG3","-1,4"],["wB1","4,-1"],["bA2","1,1"]]},"pin2":{"h":[["wG1","0,0"],["bB1","-1,1"],["wS1","1,0"],["bQ1","-2,2"],["wA1","0,-1"],["bQ1","-2,1"],["wQ1","2,0"],["bB2","-3,2"],["wA2","-1,-1"],["bA1","-1,2"],["wA3","1,1"],["bA2","-2,2"],["wA3","0,2"],["bG1","-3,3"],["wB1","1,1"],["bG2","-2,3"]],"target":"bB1"},"cover2":{"h":[["wB1","0,0"],["bS1","-1,1"],["wQ1","1,0"],["bQ1","-2,2"],["wB2","1,-1"],["bS2","-3,3"],["wS1","2,0"],["bS2","0,1"],["wA1","3,0"],["bG1","-2,1"],["wA2","4,-1"],["bG2","-2,0"],["wB1","1,-1"],["bA1","-3,2"],["wA2","-3,0"],["bA1","0,-1"]],"target":"bA1"},"win2":{"h":[["wG1","0,0"],["bS1","-1,0"],["wG2","1,-1"],["bB1","-1,-1"],["wB1","2,-1"],["bS2","-2,0"],["wQ1","3,-1"],["bQ1","-1,-2"],["wB2","3,0"],["bG1","-3,1"],["wG3","1,0"],["bA1","0,-3"],["wA1","3,1"],["bB2","0,-2"],["wA1","-1,-3"],["bG2","1,-4"],["wG2","-1,1"],["bA2","-4,1"],["wS1","4,-1"],["bA2","1,1"],["wB2","4,0"],["bG3","2,-4"],["wA1","4,-2"],["bA3","-3,0"],["wA1","-2,-2"],["bA3","-2,-1"]]},"pin3":{"h":[["wG1","0,0"],["bB1","-1,0"],["wB1","0,1"],["bG1","-2,1"],["wQ1","1,1"],["bB2","-2,0"],["wB2","1,0"],["bQ1","-2,2"],["wG2","1,2"],["bS1","-2,-1"],["wB1","0,2"],["bG2","-3,1"],["wG3","0,1"],["bG3","-1,-2"],["wG2","-1,2"],["bA1","-4,2"]],"target":"bG1"},"cover1":{"h":[["wG1","0,0"],["bB1","-1,0"],["wB1","0,1"],["bG1","-2,1"],["wQ1","1,1"],["bB2","-2,0"],["wB2","1,0"],["bQ1","-2,2"],["wG2","1,2"],["bS1","-2,-1"],["wB1","0,2"],["bG2","-3,1"],["wG3","0,1"],["bG3","-1,-2"],["wG2","-1,2"],["bA1","-4,2"],["wB1","0,1"],["bA1","2,-1"],["wS1","1,2"],["bS2","3,-1"],["wB1","-1,2"],["bG2","-1,1"]],"target":"bQ1"},"cover3":{"h":[["wB1","0,0"],["bA1","1,-1"],["wQ1","0,1"],["bQ1","2,-2"],["wA1","0,2"],["bS1","1,-2"],["wG1","-1,2"],["bS2","2,-3"],["wS1","1,2"],["bB1","2,-1"],["wS2","2,1"],["bB2","1,-3"],["wG2","-2,2"],["bB2","0,-2"],["wB2","-2,1"],["bB1","1,0"],["wA2","1,3"],["bA2","-1,-1"],["wB1","1,-1"],["bA3","1,-3"]],"target":"bQ1","reply":["bA2","0,-1"],"first":["wB1","2,-2"]},"win3":{"h":[["wA1","0,0"],["bG1","1,-1"],["wQ1","-1,0"],["bQ1","2,-2"],["wA2","-1,1"],["bB1","1,-2"],["wS1","-1,2"],["bA1","1,-3"],["wB1","-2,0"],["bA1","-2,-1"],["wB2","-2,2"],["bA1","2,-3"],["wA3","-3,2"],["bB1","1,-1"],["wG1","-1,-1"],["bA2","1,-3"],["wB1","-2,1"],["bB1","0,0"],["wB2","-1,1"],["bS1","3,-3"],["wS2","-1,-2"],["bB2","3,-2"],["wA3","2,-1"],["bA2","-2,0"]]}};
 
@@ -892,6 +1167,211 @@ const Openers = [
     ]}
   ]}
 ];
+// ---- Branching lines (OPENERS-BRANCHING-NOTES.md). A step's then may hold branches[] instead of
+// move: the computer plays one branch's move (the screen picks a branch not solved yet), and the line
+// continues with that branch's own steps[] (2+ learner moves each). A branching step is the last of
+// its steps[]. check-openers.cjs replays every branch path. Shared replies are reused from the lines
+// above so the grading stays identical where the position is the same.
+{
+ const line = id => Openers.find(x => x.id === id).steps;
+ const zA = line("z-attack-line"), zD = line("z-defence-line"), fA = line("f-attack-line");
+ const wl = Openers.find(x => x.id === "white-last"), xa = Openers.find(x => x.id === "x-answer");
+ const secondAnt = (pin, extra) => ({goal:"Move 3: keep the pin and add to the attack.",
+  hint:"Your pinning ant is doing its job. Don't move it again; bring in a new bug instead.",
+  other:"Moving the pinning ant again frees the black queen and wastes a tempo (pp. 217-218).",
+  replies:[
+   {name:"Second ant",verdict:"best",pins:pin,moves:[["wA2","-1,0"],["wA2","0,-1"],["wA2","-1,2"],["wA2","-2,2"],["wA2","-2,1"]],why:"The pin stays and a second free ant joins the attack. Z Opening games often go to the side with the most free ants (p. 225)."},
+   {name:"Other new bug",verdict:"playable",pins:pin,moves:[["wS1","-1,2"],["wG2","-1,2"],["wB1","-1,2"]],why:"The pin stays, which is what matters. An ant is more mobile, so it adds more to the attack."},
+   {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:extra,why:"Moving the same bug twice loses a tempo and frees the black queen (pp. 217-218)."}]});
+ Openers.push(
+ {id:"z-attack-branch",group:"Branching line",pages:"29-30, 217-219, 225",
+  name:"Z Opening as White: answer Black's defender",
+  summary:"Black chose the Z Opening. Bring in your ant; Black then answers in one of three ways, and your pin depends on which.",
+  goal:"You are White. Play three moves of the Z Opening attack against Black's reply.",
+  hint:"White's opening goal: immobilise the black queen as fast as possible, and keep your ants free.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wQ1","-1,1"],["bQ1","2,-1"]],
+  other:"That move does not help the attack on the black queen.",
+  steps:[
+   {goal:"Move 1: bring in the bug that will attack the black queen.",hint:zA[0].hint,other:zA[0].other,replies:zA[0].replies,
+    then:{branches:[
+     {name:"Spider beside queen and hopper",move:["bS1","2,0"],why:"Black's spider touches the queen and the first hopper. Two spaces still touch only the black queen.",
+      steps:[zA[1],secondAnt("bQ1",[["wA1","3,-1"],["wA1","1,-1"]])]},
+     {name:"Ant on the far side of the queen",move:["bA1","3,-1"],why:"Black's ant touches only the queen, so Black has pinned her own queen: she cannot move without cutting the ant off. The ant itself is free.",
+      steps:[
+       {goal:"Move 2: the black queen is already stuck. Deal with Black's free ant.",
+        hint:"A bug that touches only Black's ant pins it, and the queen stays stuck as long as the ant hangs on her.",
+        other:"Black's ant is still free to run round the hive.",
+        replies:[
+         {name:"Pin Black's ant",verdict:"best",pins:["bQ1","bA1"],moves:[["wA1","4,-1"],["wA1","3,0"],["wA1","4,-2"]],why:"Your ant touches only Black's ant, so neither the ant nor the queen can move. Black is left with no free ant (p. 225: free ants decide Z Openings)."},
+         {name:"Second ant first",verdict:"playable",pins:"bQ1",frees:"bA1",moves:[["wA2","-1,0"],["wA2","0,-1"],["wA2","-2,2"],["wA2","-2,1"]],why:"The queen stays stuck, but Black's ant is free to pin one of your attackers."},
+         {name:"Pin the queen as well",verdict:"weak",pins:"bQ1",frees:"bA1",moves:[["wA1","2,-2"],["wA1","3,-2"]],why:"The queen is already stuck, so this spends the move on nothing new and leaves Black's ant free."},
+         {name:"Ant beside queen and first hopper",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"]],why:"This space links Black's ant to the rest of the hive, so the black queen is free again."}],
+        then:{move:["bS1","1,1"],why:"Black adds a spider on the far side of the first hopper."}},
+       {goal:"Move 3: keep both pins and add to the attack.",
+        hint:"Both black bugs are held by your one ant. Leave it there and bring in a new bug.",
+        other:"Moving the pinning ant again frees Black's ant and wastes a tempo.",
+        replies:[
+         {name:"Second ant",verdict:"best",pins:["bQ1","bA1"],moves:[["wA2","-1,0"],["wA2","0,-1"],["wA2","-1,2"],["wA2","-2,2"],["wA2","-2,1"]],why:"Both pins stay and a second free ant joins the attack."},
+         {name:"Other new bug",verdict:"playable",pins:["bQ1","bA1"],moves:[["wS1","-1,2"],["wG2","-1,2"],["wB1","-1,2"]],why:"Both pins stay. An ant would add more mobility."},
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"]],why:"Your ant now links Black's ant to the hive, so the queen and the ant are both free, and you moved the same bug twice."}]}]},
+     {name:"Spider behind the first hopper",move:["bS1","1,1"],why:"Black's spider touches only the first hopper, so all three of the queen's open sides away from it touch nothing else.",
+      steps:[
+       {goal:"Move 2: stop the black queen from moving.",
+        hint:"Find a space that touches the black queen and nothing else. There are more of them now than in the spider-beside-queen branch.",
+        other:"That move leaves the black queen free to move. Look for a space that touches the queen and nothing else.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","3,-1"],["wA1","2,-2"],["wA1","3,-2"]],why:"Your ant touches only the black queen, so she cannot move. With the spider away from her, (3,-1) pins too."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-2,3"],["wS1","-2,3"],["wG2","-2,3"]],why:"More bugs help later, but the black queen can still walk to safety. Pin her first."},
+         {name:"Ant beside queen and hopper",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"],["wA1","1,-1"]],why:"The ant also touches other bugs, so the hive stays connected without the queen. She can still slide away."}],
+        then:{move:["bA1","2,1"],why:"Black gets an ant into play behind the spider (p. 30)."}},
+       secondAnt("bQ1",[["wA1","2,0"],["wA1","1,-1"]])]}]}}
+  ]},
+
+ {id:"f-attack-branch",group:"Branching line",pages:"29-30, 224, 226",
+  name:"F Opening as White: pin whichever side is open",
+  summary:"Black answered your elbow queen with an inline queen (F Opening). After your ant comes in, Black covers one side of the queen, and the pinning space depends on which.",
+  goal:"You are White. Play three moves against the F Opening.",
+  hint:"Pin the black queen fast, then bring in more ants.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wQ1","-1,1"],["bQ1","2,0"]],
+  other:"That move does not press White's advantage.",
+  steps:[
+   {goal:"Move 1: bring in the bug that will attack the black queen.",hint:fA[0].hint,other:fA[0].other,replies:fA[0].replies,
+    then:{branches:[
+     {name:"Spider in the upper elbow",move:["bS1","2,-1"],why:"Black adds a spider beside the queen, as in the book's F Opening example (spider and ant defenders).",
+      steps:[fA[1],fA[2]]},
+     {name:"Ant in the lower elbow",move:["bA1","1,1"],why:"Black's ant touches the queen and the first hopper on the lower side, so the open pinning spaces move.",
+      steps:[
+       {goal:"Move 2: stop the black queen from moving.",
+        hint:"Black's ant covers the lower side. Find a space that touches the black queen and nothing else.",
+        other:"That move leaves the black queen free to move. Look for a space that touches the queen and nothing else.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","3,0"],["wA1","3,-1"]],why:"Your ant touches only the black queen, so she cannot move. (2,1) no longer pins in this branch, because Black's ant touches it."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","2,-1"]],why:"The ant also touches another black bug, so the queen can still slide away."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-2,3"],["wS1","-2,3"]],why:"Useful later, but the black queen is still free. Pin her first."}],
+        then:{move:["bS1","1,2"],why:"Black adds a spider behind the ant."}},
+       {goal:"Move 3: keep the pin and bring in more force.",hint:fA[2].hint,other:fA[2].other,
+        replies:[fA[2].replies[0],fA[2].replies[1],
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","2,-1"]],why:"You free the black queen and lose a tempo by moving the same bug twice (pp. 217-218)."}]}]}]}}
+  ]},
+
+ {id:"white-last-branch",group:"Branching line",pages:"29-30, 58, 217-218, 223-225",
+  name:"White places the queen last: Z, then pin",
+  summary:"Black placed the queen first, in the lower elbow. Choose the Z Opening, then pin the black queen with the ant you already have in play. Where the pin goes depends on Black's reply.",
+  goal:"You are White. Choose the opening, then attack the black queen.",
+  hint:"White wants an open game: queens on opposite sides of the centre line, then a fast pin.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wA1","-1,0"],["bQ1","1,1"]],
+  other:"That move gives away White's opening initiative.",
+  steps:[
+   {goal:"Move 1: place your queen to choose the opening.",hint:wl.hint,other:wl.other,replies:wl.replies,
+    then:{branches:[
+     {name:"Spider beside queen and hopper",move:["bS1","2,0"],why:"Black's spider touches the queen and the first hopper.",
+      steps:[
+       {goal:"Move 2: your ant can move now. Pin the black queen.",
+        hint:"Find a space that touches the black queen and nothing else.",
+        other:"That move leaves the black queen free to move.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","0,2"],["wA1","1,2"]],why:"Your ant touches only the black queen, so she cannot move."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","0,1"]],why:"The ant also touches the spider or the first bugs, so the queen can still slide away."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-1,-1"],["wS1","-1,-1"]],why:"More bugs help later, but the black queen is still free. Pin her first."}],
+        then:{move:["bA1","3,0"],why:"Black brings an ant into play behind the spider (p. 30)."}},
+       {goal:"Move 3: keep the pin and add to the attack.",
+        hint:"Your pinning ant is doing its job. Bring in a new bug.",
+        other:"Moving the pinning ant again frees the black queen and wastes a tempo (pp. 217-218).",
+        replies:[
+         {name:"Second ant",verdict:"best",pins:"bQ1",moves:[["wA2","-1,0"],["wA2","-1,-1"],["wA2","0,-2"],["wA2","1,-2"],["wA2","-1,1"]],why:"The pin stays and a second free ant joins the attack (p. 225)."},
+         {name:"Other new bug",verdict:"playable",pins:"bQ1",moves:[["wS1","-1,0"],["wG2","-1,0"],["wB1","-1,0"]],why:"The pin stays. An ant adds more mobility."},
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","0,1"]],why:"You free the black queen and move the same bug twice."}]}]},
+     {name:"Spider beside the first hopper only",move:["bS1","2,-1"],why:"Black's spider touches only the first hopper. The queen's side at (2,1) now touches nothing but her.",
+      steps:[
+       {goal:"Move 2: your ant can move now. Pin the black queen.",
+        hint:"Find a space that touches the black queen and nothing else. There is one more than when the spider sits beside her.",
+        other:"That move leaves the black queen free to move.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","2,1"],["wA1","1,2"],["wA1","0,2"]],why:"Your ant touches only the black queen, so she cannot move. (2,1) works here because no black bug is next to it."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"],["wA1","0,1"]],why:"The ant also touches other bugs, so the queen can still slide away."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-1,-1"],["wS1","-1,-1"]],why:"More bugs help later, but the black queen is still free. Pin her first."}],
+        then:{move:["bA1","3,-1"],why:"Black brings an ant into play behind the spider (p. 30)."}},
+       {goal:"Move 3: keep the pin and add to the attack.",
+        hint:"Your pinning ant is doing its job. Bring in a new bug.",
+        other:"Moving the pinning ant again frees the black queen and wastes a tempo (pp. 217-218).",
+        replies:[
+         {name:"Second ant",verdict:"best",pins:"bQ1",moves:[["wA2","-1,0"],["wA2","-1,-1"],["wA2","0,-2"],["wA2","1,-2"],["wA2","-1,1"]],why:"The pin stays and a second free ant joins the attack (p. 225)."},
+         {name:"Other new bug",verdict:"playable",pins:"bQ1",moves:[["wS1","-1,0"],["wG2","-1,0"],["wB1","-1,0"]],why:"The pin stays. An ant adds more mobility."},
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"],["wA1","0,1"]],why:"You free the black queen and move the same bug twice."}]}]}]}}
+  ]},
+
+ {id:"x-answer-branch",group:"Branching line",pages:"29-31, 219, 224, 227",
+  name:"Answering an X Opening: queen, then react",
+  summary:"White opened with a hopper and an ant and held the queen back. Get your queen in, then answer whatever White does next.",
+  goal:"You are Black. Punish White's delayed queen.",
+  hint:"White's bugs cannot move until the white queen is down. Use the time.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wA1","-1,0"]],
+  other:"That move does not use White's lost tempo.",
+  steps:[
+   {goal:"Move 1: answer White's delayed queen.",hint:xa.hint,other:xa.other,replies:xa.replies,
+    then:{branches:[
+     {name:"White places the queen",move:["wQ1","-1,1"],why:"White gets the queen in at last, beside the hopper and the ant.",
+      steps:[
+       {goal:"Move 2: put a good defender next to your queen.",
+        hint:"The best defenders can jump or climb out of a closed space. Put one where it touches your queen and your first hopper.",
+        other:"That bug does not defend your queen.",
+        replies:[
+         {name:"Hopper beside queen and first bug",verdict:"best",frees:"bQ1",moves:[["bG2","2,0"]],why:"A hopper can jump out later to counter-attack, and because it also touches your first hopper your queen stays mobile (p. 30)."},
+         {name:"Beetle beside queen and first bug",verdict:"playable",frees:"bQ1",moves:[["bB1","2,0"]],why:"A beetle also defends well, but you have only two and they are slow attackers."},
+         {name:"Spider as defender",verdict:"weak",moves:[["bS1","2,0"]],why:"Spiders make poor defenders: they are easily pinned or blocked (p. 219)."},
+         {name:"Ant first",verdict:"playable",moves:[["bA1","2,0"],["bA1","2,1"],["bA1","1,2"],["bA1","3,-1"],["bA1","2,-2"]],why:"Ants in play is part of the plan, but set up the defender while there is room next to the queen."}],
+        then:{move:["wS1","-2,1"],why:"White adds a spider beside the ant."}},
+       {goal:"Move 3: get an ant into play.",
+        hint:"Ants are the best defenders of the whole hive. Bring one in and keep your hopper where it is.",
+        other:"Bring in an ant while your hopper stays next to the queen.",
+        replies:[
+         {name:"Ant into play",verdict:"best",moves:[["bA1","1,1"],["bA1","1,2"],["bA1","2,1"],["bA1","3,0"],["bA1","3,-1"],["bA1","2,-1"],["bA1","2,-2"],["bA1","3,-2"]],why:"A free ant can run round the hive to pin White's attackers or block an attack (p. 30)."},
+         {name:"Another new bug",verdict:"playable",moves:[["bS1","3,0"],["bB1","3,0"]],why:"Developing is fine, but an ant gives Black the most mobility."},
+         {name:"Pull the defender away",verdict:"weak",moves:[["bG2","-2,0"]],why:"Your hopper leaves the queen without a defender, and you spend a tempo moving a bug twice."}]}]},
+     {name:"White delays the queen again",move:["wS1","-2,1"],why:"White holds the queen back once more. The rules force White to place it next turn, and until then no white bug can move.",
+      steps:[
+       {goal:"Move 2: White's bugs still cannot move. Bring in your fastest bug.",
+        hint:"Which bug could reach any space next to White's queen once she arrives?",
+        other:"That bug is slower than an ant.",
+        replies:[
+         {name:"Ant into play",verdict:"best",moves:[["bA1","2,0"],["bA1","2,-1"],["bA1","2,1"],["bA1","1,2"],["bA1","0,2"],["bA1","1,1"],["bA1","3,-1"],["bA1","2,-2"],["bA1","3,-2"]],why:"Your queen is down, so your ant is free from the next move on. White gets no free bug until the queen arrives (p. 227)."},
+         {name:"Defender first",verdict:"playable",moves:[["bG2","2,0"]],why:"A sound defender, but White cannot attack yet. An ant uses the tempo White gave you."},
+         {name:"Spider",verdict:"weak",moves:[["bS1","2,0"]],why:"A spider is slow, and spiders make poor defenders (p. 219)."}],
+        then:{move:["wQ1","-1,1"],why:"White must place the queen on turn four. She touches the hopper, the ant and the spider."}},
+       {goal:"Move 3: use your free ant against White's new queen.",
+        hint:"A bug that touches only the white queen pins her.",
+        other:"That move leaves the white queen free to move.",
+        replies:[
+         {name:"Ant pins the white queen",verdict:"best",pins:"wQ1",moves:[["bA1","-1,2"]],why:"Your ant touches only the white queen, so she cannot move. White's lost tempi have handed Black the first pin."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"wQ1",moves:[["bA1","-2,2"],["bA1","0,1"]],why:"The ant also touches other bugs, so the white queen can still move."},
+         {name:"Defender next to your queen",verdict:"playable",moves:[["bG2","2,0"],["bG2","3,-1"],["bG2","2,1"]],why:"Solid, but your free ant can do more right now."}]}]}]}}
+  ]},
+
+ {id:"z-defence-branch",group:"Branching line",pages:"30-31, 219, 223-225",
+  name:"Z Opening as Black: defend from either side",
+  summary:"White opened with a hopper and an elbow queen. Choose the Z Opening; White's ant then comes in from below or from above, and your last move depends on where it ends up.",
+  goal:"You are Black. Play three moves of a sound Black opening.",
+  hint:"Black's opening goals: queen early, a good defender next to her, and ants in play quickly.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wQ1","-1,1"]],
+  other:"That move does not follow Black's opening plan.",
+  steps:[
+   {goal:zD[0].goal,hint:zD[0].hint,other:zD[0].other,replies:zD[0].replies,
+    then:{branches:[
+     {name:"Ant from below",move:["wA1","-1,2"],why:"White brings in an ant below the queen to attack yours.",
+      steps:[zD[1],zD[2]]},
+     {name:"Ant from above",move:["wA1","0,-1"],why:"White's ant comes in on the top side, nearer your queen.",
+      steps:[
+       {goal:zD[1].goal,hint:zD[1].hint,other:zD[1].other,replies:zD[1].replies,
+        then:{move:["wA1","2,-2"],why:"White's ant pins your queen from the top side. That is normal in a Z Opening; your hopper beside her is what matters."}},
+       {goal:"Move 3: get an ant into play.",
+        hint:"Ants are the best defenders of the whole hive. Bring one in and keep your hopper where it is. White's ant sits on a different side this time.",
+        other:"Bring in an ant while your hopper stays next to the queen.",
+        replies:[
+         {name:"Ant into play",verdict:"best",moves:[["bA1","1,1"],["bA1","3,0"],["bA1","2,1"],["bA1","3,-1"]],why:"A free ant can run round the hive to pin White's attackers or block an attack (p. 30). With White's ant at (2,-2), (3,-1) is open to you too."},
+         {name:"Another new bug",verdict:"playable",moves:[["bS1","3,0"],["bG3","3,0"],["bB1","3,0"]],why:"Developing is fine, but an ant gives Black the most mobility to answer White's attack."},
+         {name:"Pull the defender away",verdict:"weak",moves:[["bG2","-1,0"]],why:"Your hopper leaves the queen, so she loses her defender, and you spend a tempo moving a bug twice."}]}]}]}}
+  ]});
+}
 if(typeof module!=="undefined") module.exports=Openers;
 
 const Art = (() => {
@@ -959,6 +1439,9 @@ const StudyBoard = (() => {
    const interactive=(key,label)=>state.readOnly?' role="img" aria-label="'+label+'"':' role="button" tabindex="0" data-cell="'+key+'" aria-label="'+label+'"';
    function spot(k){
      const highlight=ans?.to===k;
+     // Pillbug-ability target (expansion games only: base moves never carry `by`): violet, with a lift arrow.
+     const by=opts.find(m=>m.to===k&&m.by&&!opts.some(n=>n.to===k&&!n.by))?.by;
+     if(by)return '<g class="destination ability" transform="'+pp(k)+'"'+interactive(k,'Move '+legend(selected)+' with '+legend(by).toLowerCase()+' to '+k)+'><title>Move with the '+(by[1]==="M"?"mosquito (as a pillbug)":"pillbug")+'</title><polygon class="spot-outline" points="'+pts(r-3)+'" stroke="#d2b8ff" fill="#8a6fc0" fill-opacity=".3" stroke-width="2.2" stroke-dasharray="2 3"/><path d="M0 7V-6M-5-1 0-6 5-1" fill="none" stroke="#efe2ff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></g>';
      return '<g class="destination" transform="'+pp(k)+'"'+interactive(k,'Move '+legend(selected)+' to '+k)+'><polygon class="spot-outline" points="'+pts(r-3)+'" stroke="'+(highlight?'#ffcd52':'#a8d0a7')+'" fill="'+(highlight?'#c5a043':'#709d72')+'" fill-opacity=".23" stroke-width="1.8" stroke-dasharray="4 3"/><circle r="'+(highlight?6:4.8)+'" fill="'+(highlight?'#ffda70':'#d2e8bc')+'"/></g>';
    }
    for(const k of ends)if(!board[k])html+=spot(k);
@@ -991,7 +1474,7 @@ const StudyBoard = (() => {
 const R=HiveRules, I=Art.icon, main=document.querySelector("#main"), dialog=document.querySelector("#reserve");
 const ids=Courses.flatMap(c=>c.ids), key="hive-study.progress.v1";
 const course=id=>Courses.find(c=>c.ids.includes(id));
-const page=()=>["guide","progress","openers"].includes(location.hash.slice(1))?location.hash.slice(1):"practice";
+const page=()=>["guide","progress","openers","play"].includes(location.hash.slice(1))?location.hash.slice(1):"practice";
 function readProgress(){try {const obj=JSON.parse(localStorage.getItem(key))||{};return Object.fromEntries(ids.filter(id=>["guided","independent"].includes(obj[id])).map(id=>[id,obj[id]]))}catch{return {}}}
 let progress=readProgress(),s,queue=null,mixed=false,storageMessage="";
 const byId=id=>document.getElementById(id);
@@ -1089,19 +1572,39 @@ function stats(){
 // ---- Openers trainer. Lines live in openers.js and are verified by check-openers.cjs. ----
 const okey="hive-study.openers.v1",verdictLabel={best:"Book move",playable:"Playable",weak:"Weak"};
 function readOpeners(){try{const obj=JSON.parse(localStorage.getItem(okey))||{};return Object.fromEntries(Openers.filter(x=>["guided","independent"].includes(obj[x.id])).map(x=>[x.id,obj[x.id]]))}catch{return {}}}
-let oprog=readOpeners(),o=null;
+// Branching lines: progress per branch route, {lineId:{routeKey:"guided"|"independent"}}.
+const bkey="hive-study.openers.branches.v1";
+function readBranches(){try{const obj=JSON.parse(localStorage.getItem(bkey))||{};return obj&&typeof obj==="object"?obj:{}}catch{return {}}}
+let oprog=readOpeners(),bprog=readBranches(),o=null;
 const opener=()=>Openers.find(x=>x.id===o.id);
 // A single-move opener is treated as a line of one step; multi-move lines carry steps[].
 const stepsOf=x=>x.steps||[x];
-const step=()=>stepsOf(opener())[o.step];
+// Every route through a line. A step whose then.branches lists several opponent replies is the last
+// of its steps[]; each branch carries its own steps[]. Linear lines and single openers have one route.
+function routesOf(steps,acc=[],thens=[],key=[],names=[]){
+ const k=steps.findIndex(st=>st.then&&st.then.branches),head=k<0?steps:steps.slice(0,k+1);
+ const t=[...thens,...head.map(st=>st.then||null)];
+ if(k<0)return [{steps:[...acc,...head],thens:t,key:key.join("."),names}];
+ const bs=steps[k].then.branches;
+ return bs.flatMap((b,i)=>{const tt=[...t];tt[tt.length-1]={...b,branch:{i,n:bs.length,name:b.name}};return routesOf(b.steps,[...acc,...head],tt,[...key,i],[...names,b.name])});
+}
+const routeCount=x=>routesOf(stepsOf(x)).length;
+// Pick the computer's branch for this run: a route not solved yet and not the one just played if
+// possible, at random among those.
+function pickRoute(x,lastKey){
+ const rs=routesOf(stepsOf(x)),done=bprog[x.id]||{};
+ const pool=[rs.filter(r=>!done[r.key]&&r.key!==lastKey),rs.filter(r=>!done[r.key]),rs.filter(r=>r.key!==lastKey),rs].find(p=>p.length);
+ return pool[Math.floor(Math.random()*pool.length)];
+}
+const step=()=>o.route.steps[o.step];
 const replyFor=m=>step().replies.find(r=>r.moves.some(([id,to])=>id===m.id&&to===m.to));
 const isBest=m=>replyFor(m)?.verdict==="best";
 const findMove=(b,ply,[piece,to])=>R.moves(b,ply%2?"b":"w",ply).find(m=>m.id===piece&&m.to===to);
-function startOpener(id){
+function startOpener(id,lastKey=null){
  const x=Openers.find(k=>k.id===id);let b={};
  x.h.forEach((mv,ply)=>{b=R.play(b,findMove(b,ply,mv))});
  const ply=x.h.length,side=ply%2?"b":"w";
- o={id,base:b,board:b,ply,side,step:0,legal:R.moves(b,side,ply),selected:null,mode:"move",reply:null,hint:false,solution:false,assisted:false,stepHelp:false,info:"",last:x.h.at(-1)?.[1]||null,flip:false,played:x.h.map(([p])=>p),results:[],prev:null};
+ o={id,route:pickRoute(x,lastKey),base:b,board:b,ply,side,step:0,legal:R.moves(b,side,ply),selected:null,mode:"move",reply:null,hint:false,solution:false,assisted:false,stepHelp:false,info:"",last:x.h.at(-1)?.[1]||null,flip:false,played:x.h.map(([p])=>p),results:[],prev:null};
 }
 function stepGrade(res){
  const tail=res.help?" with a hint":"";
@@ -1109,9 +1612,18 @@ function stepGrade(res){
 }
 function recordOpener(){
  oprog={...readOpeners(),...oprog};
- if(oprog[o.id]!=="independent")oprog[o.id]=o.assisted?"guided":"independent";
- try{localStorage.setItem(okey,JSON.stringify(oprog))}catch{storageMessage="Progress is available for this session. Browser storage is unavailable."}
+ const x=opener(),n=routeCount(x);
+ if(n>1){
+  // Branching line: solved once every branch route has been solved at least once.
+  bprog={...readBranches(),...bprog};const mine={...(bprog[o.id]||{})};
+  if(mine[o.route.key]!=="independent")mine[o.route.key]=o.assisted?"guided":"independent";
+  bprog[o.id]=mine;
+  const vals=routesOf(stepsOf(x)).map(r=>mine[r.key]);
+  if(vals.every(Boolean)&&oprog[o.id]!=="independent")oprog[o.id]=vals.every(v=>v==="independent")?"independent":"guided";
+ }else if(oprog[o.id]!=="independent")oprog[o.id]=o.assisted?"guided":"independent";
+ try{localStorage.setItem(okey,JSON.stringify(oprog));if(n>1)localStorage.setItem(bkey,JSON.stringify(bprog))}catch{storageMessage="Progress is available for this session. Browser storage is unavailable."}
 }
+const branchesSolved=x=>routesOf(stepsOf(x)).filter(r=>(bprog[x.id]||{})[r.key]).length;
 function openerSolution(){const m=o.legal.find(isBest);return (m.from?"Move the ":"Place the reserve ")+sayId(m.id).toLowerCase()+" on the gold space."}
 function openerBoard(){
  const side=o.side==="w"?"White":"Black";
@@ -1120,27 +1632,30 @@ function openerBoard(){
 }
 function openerGoal(){const x=opener();return (x.steps&&step().goal)||x.goal}
 function openerCoach(){
- const x=opener(),i=Openers.indexOf(x),st=step(),n=stepsOf(x).length,multi=!!x.steps;
+ const x=opener(),i=Openers.indexOf(x),st=step(),n=o.route.steps.length,multi=!!x.steps,nb=routeCount(x);
  const line=o.played.length?o.played.map((id,k)=>(k+1)+". "+sayId(id)).join(" · "):"Empty board. White places first.";
  const opp=o.side==="w"?"Black":"White";
  let body='<div class="coach-body"><p class="micro">'+x.summary+'</p><p class="micro"><b>Line so far:</b> '+line+'</p>',actions="";
  if(o.mode==="move"){
-  if(o.prev)body+='<div class="notice good"><b>Move '+o.step+': '+o.prev.reply.name+' · Book move.</b> '+o.prev.reply.why+'</div><div class="objective-label">'+I("board",17)+opp+' replied: '+sayId(o.prev.answer.id)+' to ('+o.prev.answer.to+')</div><p class="micro">'+o.prev.why+'</p>'+
+  if(o.prev)body+='<div class="notice good"><b>Move '+o.step+': '+o.prev.reply.name+' · Book move.</b> '+o.prev.reply.why+'</div><div class="objective-label">'+I("board",17)+opp+' replied: '+sayId(o.prev.answer.id)+' to ('+o.prev.answer.to+')</div>'+(o.prev.branch?'<p class="micro branch-taken"><b>Branch '+(o.prev.branch.i+1)+' of '+o.prev.branch.n+': '+o.prev.branch.name+'.</b> Your next move depends on this reply.</p>':'')+'<p class="micro">'+o.prev.why+'</p>'+
    (o.prev.alts.length?'<details class="reply-note"><summary>Other replies '+opp+' could play</summary>'+o.prev.alts.map(a=>'<p class="micro"><b>'+sayId(a.move[0])+' to ('+a.move[1]+'):</b> '+a.why+'</p>').join("")+'</details>':'');
   body+=(o.info?'<p class="micro">'+o.info+'</p>':'')+(o.hint?'<div class="hint-box"><div class="hint-title">'+I("bulb",16)+(o.solution?"Book move":"Hint")+'</div><div>'+(o.solution?openerSolution():st.hint||x.hint)+'</div></div>':'')+'</div>';
   actions='<div class="action-stack '+(o.hint?"":"two")+'">'+(o.solution?"":!o.hint?btn("o-hint","Get a hint","bulb","gold full"):btn("o-reveal","Show book move","eye","gold full"))+(o.hint?"":btn("o-reveal","Show book move","eye","plain full"))+'</div>';
  }else{
   const r=o.reply,good=r?.verdict==="best";
   body+='<div class="objective-label">'+I(good?"check":"eye",17)+(multi?"Move "+(o.step+1)+": ":"")+(r?r.name+" · "+verdictLabel[r.verdict]:"Not a book reply")+'</div><div class="notice'+(good?" good":"")+'">'+(r?r.why:st.other||x.other)+'</div>';
-  if(good&&multi)body+='<div class="subtle-label">'+I("chart",16)+'Line summary</div><ol class="micro line-summary">'+o.results.map((res,k)=>'<li><b>Move '+(k+1)+':</b> '+stepGrade(res)+'</li>').join("")+'</ol>';
+  if(good&&multi)body+='<div class="subtle-label">'+I("chart",16)+'Line summary</div><ol class="micro line-summary">'+o.results.map((res,k)=>'<li><b>Move '+(k+1)+':</b> '+stepGrade(res)+'</li>').join("")+'</ol>'+
+   (nb>1?'<p class="micro branch-path"><b>Branch path:</b> '+o.route.names.map((nm,k)=>opp+' reply '+(k+1)+': '+nm).join(" → ")+'</p><p class="micro"><b>Branches solved:</b> '+branchesSolved(x)+' of '+nb+(branchesSolved(x)<nb?'. Replay line to face a branch you have not solved yet.':'. Every branch of this line is solved.')+'</p>':'');
   if(good)body+='<div class="subtle-label">'+I("book",16)+(multi?'All replies for the last move':'All replies in this line')+'</div>'+st.replies.map(rr=>'<details class="reply-note"><summary>'+rr.name+' · '+verdictLabel[rr.verdict]+'</summary><p class="micro">'+rr.why+'</p></details>').join("");
   body+='</div>';
   actions='<div class="action-stack">'+(good?btn("o-next",i===Openers.length-1?"Back to first opener":"Next opener","board","green full"):"")+(good&&multi?btn("o-replay","Replay line","reset","plain full"):btn("o-retry",good?"Try another reply":"Try another move","reset",good?"plain full":"gold full"))+'</div>';
  }
- return '<aside class="coach" aria-label="Opener coach"><div class="desktop-title"><div class="panel-eyebrow"><span class="tag sage">'+I("target",14)+x.group+'</span><span class="meta">Opener '+(i+1)+' of '+Openers.length+(multi?' · Move '+(o.step+1)+' of '+n:'')+'</span></div><h2>'+x.name+'</h2><p class="goal">'+openerGoal()+'</p></div>'+body+actions+'<span class="reading">Ingersoll, 2nd ed. · pp. '+x.pages+'</span></aside>';
+ return '<aside class="coach" aria-label="Opener coach"><div class="desktop-title"><div class="panel-eyebrow"><span class="tag sage">'+I("target",14)+x.group+'</span><span class="meta">Opener '+(i+1)+' of '+Openers.length+(multi?' · Move '+(o.step+1)+' of '+n:'')+(nb>1?' · '+nb+' branches':'')+'</span></div><h2>'+x.name+'</h2><p class="goal">'+openerGoal()+'</p></div>'+body+actions+'<span class="reading">Ingersoll, 2nd ed. · pp. '+x.pages+'</span></aside>';
 }
 function openerCard(x){
- return '<button class="course-card '+(x.id===o.id?"current":"")+'" data-opener="'+x.id+'"><span class="course-top"><span class="course-icon sage">'+I("target",22)+'</span><span class="course-name">'+x.name+'</span></span><span class="course-sub">'+x.group+' · '+(x.steps?x.steps.length+'-move line':x.replies.length+' replies')+'</span><span class="mini-progress"><span>'+({guided:"Found with guidance",independent:"Found unaided"}[oprog[x.id]]||"Not solved yet")+'</span></span></button>';
+ const nb=routeCount(x),label={guided:"Found with guidance",independent:"Found unaided"}[oprog[x.id]];
+ const status=nb>1?(label?label+" · ":"")+branchesSolved(x)+" of "+nb+" branches":label||"Not solved yet";
+ return '<button class="course-card '+(x.id===o.id?"current":"")+'" data-opener="'+x.id+'"><span class="course-top"><span class="course-icon sage">'+I("target",22)+'</span><span class="course-name">'+x.name+'</span></span><span class="course-sub">'+x.group+' · '+(x.steps?Math.max(...routesOf(x.steps).map(r=>r.steps.length))+'-move line':x.replies.length+' replies')+(nb>1?' · '+nb+' branches':'')+'</span><span class="mini-progress"><span>'+status+'</span></span></button>';
 }
 function openersPage(){
  if(!o)startOpener(Openers[0].id);
@@ -1148,7 +1663,7 @@ function openersPage(){
  return '<div class="hero"><div><h1>Openers trainer</h1><p>Pick an opening, see it on the board and play your reply.</p></div></div><div class="workspace"><div class="mobile-task"><div><span class="tag sage">'+I("target",14)+x.group+'</span><h2>'+x.name+'</h2></div><p>'+openerGoal()+'</p></div>'+openerBoard()+openerCoach()+'</div><div class="section-head"><h2>Opening library</h2><span class="meta">'+Object.keys(oprog).length+' of '+Openers.length+' openers solved</span></div><div class="course-grid">'+Openers.map(openerCard).join("")+'</div>';
 }
 function openerPlay(m){
- const x=opener(),st=step(),r=replyFor(m)||null;
+ const x=opener(),st=step(),r=replyFor(m)||null,then=o.route.thens[o.step],n=o.route.steps.length;
  o.board=R.play(o.base,m);o.last=m.to;o.selected=null;o.hint=false;o.solution=false;o.info="";o.reply=r;
  o.results[o.step]??={first:r?r.verdict:"other",help:false};
  if(r?.verdict!=="best"){
@@ -1156,13 +1671,14 @@ function openerPlay(m){
   notify(r?r.name+". "+verdictLabel[r.verdict]+". "+r.why:st.other||x.other);
  }else{
   o.results[o.step].help=o.stepHelp;
-  if(o.step<stepsOf(x).length-1){
-   // Book move inside a line: the opponent's book reply is played at once and the next step starts.
-   const a=findMove(o.board,o.ply+1,st.then.move);
+  if(o.step<n-1){
+   // Book move inside a line: the opponent's reply (this route's branch, if the step branches) is
+   // played at once and the next step starts.
+   const a=findMove(o.board,o.ply+1,then.move);
    o.played.push(m.id,a.id);o.board=R.play(o.board,a);o.base=o.board;o.ply+=2;o.step++;
    o.legal=R.moves(o.base,o.side,o.ply);o.last=a.to;o.mode="move";o.reply=null;o.stepHelp=false;
-   o.prev={reply:r,answer:a,why:st.then.why,alts:st.then.alts||[]};
-   notify(r.name+". Book move. "+(o.side==="w"?"Black":"White")+" replied: "+sayId(a.id)+" to "+a.to+". "+st.then.why+" Move "+(o.step+1)+" of "+stepsOf(x).length+".");
+   o.prev={reply:r,answer:a,why:then.why,alts:then.alts||[],branch:then.branch||null};
+   notify(r.name+". Book move. "+(o.side==="w"?"Black":"White")+" replied: "+sayId(a.id)+" to "+a.to+". "+(then.branch?"Branch "+(then.branch.i+1)+" of "+then.branch.n+": "+then.branch.name+". ":"")+then.why+" Move "+(o.step+1)+" of "+n+".");
    render();main.querySelector('[data-action="o-hint"],[data-action="o-reveal"]')?.focus({preventScroll:true});return;
   }
   o.mode="result";recordOpener();
@@ -1186,18 +1702,132 @@ function openerAction(a){
  if(a==="o-flip")o.flip=!o.flip;
  if(a==="o-hint"||a==="o-reveal"){o.assisted=true;o.stepHelp=true;o.hint=true;o.solution=a==="o-reveal";if(o.solution)o.selected=o.legal.find(isBest)?.id||null;notify(o.solution?openerSolution():step().hint||opener().hint)}
  if(a==="o-retry"){o.board=o.base;o.mode="move";o.reply=null;o.last=o.prev?.answer.to||null;o.info=""}
- if(a==="o-replay")startOpener(o.id);
+ if(a==="o-replay")startOpener(o.id,o.route.key);
  if(a==="o-next"){const i=Openers.indexOf(opener());startOpener(Openers[(i+1)%Openers.length].id);window.scrollTo(0,0)}
+ render();
+}
+// ---- Play vs computer. Legal moves, passing and the result come from rules.js; ai.js picks the
+// computer's move. g is the game; gpref holds the colour and level the next new game uses. ----
+const gpref={human:"w",level:"easy",exp:[]};
+let g=null,gTok=0;
+const gSide=()=>g.ply%2?"b":"w";
+const colourName=c=>c==="w"?"White":"Black";
+const levelOf=id=>HiveAI.levels.find(l=>l.id===id);
+// Expansion pieces (opt-in). With none on, rules.js and ai.js get no options at all, exactly as before.
+const EXP=[["M","Mosquito","Moves like any piece it touches (copying a beetle lets it climb). On top of the hive it moves only as a beetle. Next to a pillbug it can use the pillbug's power."],["L","Ladybug","Moves exactly three spaces: two on top of the hive, then one down into an empty space."],["P","Pillbug","Moves one space, or instead lifts an adjacent piece (either colour) over itself into an empty space next to it. Not a piece that just moved, or one in a stack."]];
+const expName=k=>R.names[k]||R.expansionNames[k];
+const expAbout=k=>EXP.find(e=>e[0]===k)?.[2]||"";
+const gOpts=()=>g.exp.length?{expansions:g.exp,last:g.lastM}:undefined;
+const moveText=m=>sayId(m.id)+(m.by?" moved by "+sayId(m.by).toLowerCase()+" from ("+m.from+") to ("+m.to+")":m.from?" from ("+m.from+") to ("+m.to+")":" placed at ("+m.to+")");
+const gSnap=()=>({board:g.board,ply:g.ply,last:g.last,lastM:g.lastM,lastMove:g.lastMove,passes:g.passes,info:g.info});
+function newGame(){
+ gTok++;
+ g={human:gpref.human,level:gpref.level,exp:[...gpref.exp],board:{},ply:0,history:[],selected:null,legal:[],last:null,lastM:null,flip:g?.flip||false,over:null,thinking:false,info:"",lastMove:"",passes:0};
+ gTurn();
+}
+// Set up the side to move. A computer turn is played after a short pause so the human's move is seen first.
+function gTurn(){
+ g.base=g.board;g.side=gSide();g.selected=null;g.thinking=false;
+ const res=R.outcome(g.board);
+ if(res){g.over=res;g.legal=[];return}
+ g.legal=R.moves(g.board,g.side,g.ply,gOpts());
+ if(!g.legal.length&&g.passes>=1){g.over="stuck";return}
+ if(g.side!==g.human){g.thinking=true;const tok=++gTok;setTimeout(()=>gComputer(tok),350)}
+}
+function gComputer(tok){
+ if(tok!==gTok||!g||g.over)return;
+ const o={timeMs:700,history:g.history.map(h=>h.board)};if(g.exp.length)o.rules=gOpts();
+ const m=HiveAI.choose(g.board,g.side,g.ply,g.level,o);
+ if(!m){g.passes++;g.ply++;g.lastM=null;g.info="The computer has no legal move and passes.";g.lastMove=""}
+ else{g.passes=0;g.board=R.play(g.board,m);g.ply++;g.last=m.to;g.lastM={id:m.id,from:m.from||null,to:m.to};g.info="";g.lastMove=moveText(m)}
+ gTurn();
+ notify((m?"Computer played "+g.lastMove+".":g.info)+" "+gStatus());
+ if(page()==="play")render();
+}
+function gStatus(){
+ if(g.over==="draw")return "Draw. Both queens were surrounded by the same move.";
+ if(g.over==="stuck")return "Draw. Neither side can move.";
+ if(g.over)return g.over===g.human?"You win. The computer's queen is surrounded.":"The computer wins. Your queen is surrounded.";
+ if(g.thinking)return "The computer is thinking.";
+ return g.legal.length?"Your move.":"You have no legal move. Pass the turn.";
+}
+function gHuman(m){
+ g.history.push(gSnap());
+ g.board=R.play(g.board,m);g.ply++;g.last=m.to;g.lastM={id:m.id,from:m.from||null,to:m.to};g.passes=0;g.info="";
+ const mine=moveText(m);g.lastMove="";
+ gTurn();notify("You played "+mine+". "+gStatus());render();
+}
+// Why a piece (own or the computer's) has no move this turn; in expansion games, a frozen piece first.
+function gWhy(id,k,own){
+ const fr=g.exp.length&&g.lastM?.from&&g.lastM.id===id;
+ if(!own)return fr?sayId(id)+" moved last turn, so a pillbug can't move it this turn.":sayId(id)+" belongs to the computer. Select one of your own pieces.";
+ if(fr)return "This piece moved last turn (by a pillbug), so it can't move or be moved this turn.";
+ return !R.locate(g.board,g.human+"Q1")?"Bugs cannot move until your queen is placed.":!R.connected(R.lift(g.board,k))?"This piece holds the hive together, so it cannot move.":"This piece has no legal destination from here.";
+}
+function gCell(k){
+ if(g.over||g.thinking||g.side!==g.human)return;
+ const move=g.selected&&g.legal.find(m=>m.id===g.selected&&m.to===k);
+ if(move)return gHuman(move);
+ const id=R.top(g.board,k);if(!id)return;
+ const opts=g.legal.filter(m=>m.id===id),own=id[0]===g.human,lifts=opts.filter(m=>m.by).length,steps=opts.length-lifts;
+ // A computer piece can be selected only when your pillbug (or a mosquito next to one) can move it.
+ if(!own&&!lifts){g.info=gWhy(id,k,false);notify(g.info);render();return}
+ g.selected=g.selected===id?null:id;
+ const n=(c,w)=>c+" "+w+(c===1?"":"s");
+ g.info=!g.selected?"":opts.length?(steps?n(steps,"legal destination"):"")+(steps&&lifts?" and ":"")+(lifts?n(lifts,"move-with-pillbug target")+" (violet, with an arrow)":"")+". Choose a marked space.":gWhy(id,k,true);
+ if(g.selected&&own&&g.exp.includes("P")&&R.abilities(g.board,k,gOpts()).length)g.info+=" To use its pillbug power, select a piece next to it.";
+ notify(g.info||"Piece deselected.");render();
+}
+function playBoard(){
+ const mine=!g.over&&!g.thinking&&g.side===g.human;
+ const prompt=g.over?"Game over. Start a new game or undo your last move.":g.thinking?"The computer is choosing its move.":!g.legal.length?"You have no legal move. Pass the turn.":g.selected?"Choose a highlighted destination.":R.locate(g.board,g.human+"Q1")?"Select a piece or open your reserve.":"Open your reserve to choose a piece.";
+ const turn=g.over?"Game over":g.thinking?"Computer ("+colourName(g.side)+") thinking…":"Your move · "+colourName(g.human);
+ return '<section class="board-card" aria-label="Game board"><div class="board-bar"><div class="board-heading">'+I("board",20)+'Game board</div><span class="turn-pill"><b class="'+(!g.over&&g.side==="b"?"black-token":"")+'"></b>'+turn+'</span></div><div class="board-plane">'+StudyBoard.draw({board:g.board,fromBoard:g.board,selected:g.selected,legal:g.legal,target:null,focusCell:Object.keys(g.board).length?null:"0,0",flip:g.flip,mode:mine?"move":"observe",last:g.last,solution:false,pass:()=>false})+'</div><div class="board-tools"><span class="board-instruction">'+I("pointer",15)+prompt+'</span><span class="board-buttons"><button class="tool" data-action="g-reserve" '+(mine&&g.legal.length?"":"disabled")+' title="Choose a reserve piece">'+I("layers",16)+'Reserve</button><button class="tool rotate-tool" data-action="g-flip" title="Rotate the board" aria-label="Rotate the board">'+I("rotate",16)+'</button></span></div></section>';
+}
+function playCoach(){
+ const lv=levelOf(g.level),turnNo=Math.floor(g.ply/2)+1,pending=gpref.human!==g.human||gpref.level!==g.level||gpref.exp.join("")!==g.exp.join("");
+ const seg=(act,on,label)=>'<button type="button" class="btn" data-action="'+act+'" aria-pressed="'+on+'">'+label+'</button>';
+ let body='<div class="coach-body">';
+ if(g.over){
+  const won=g.over===g.human;
+  body+='<div class="notice game-over'+(won?" good":"")+'" role="status">'+I(won?"check":"eye",17)+' <b>'+(won?"You win!":g.over==="draw"||g.over==="stuck"?"Draw.":"The computer wins.")+'</b> '+gStatus().replace(/^(You win|The computer wins|Draw)\. ?/,"")+'</div>';
+ }else if(g.thinking)body+='<div class="objective-label">'+I("eye",17)+'The computer is thinking…</div>';
+ else if(!g.legal.length)body+='<div class="notice">You have no legal move, so you must pass.</div>'+btn("g-pass","Pass the turn","chevron","gold full");
+ else body+='<div class="objective-label">'+I("target",17)+(g.selected?sayId(g.selected):"Your move")+'</div><p class="micro">'+(g.info||(R.locate(g.board,g.human+"Q1")?"Select one of your pieces or open your reserve, then choose a highlighted space.":"Open your reserve and choose a bug. Your queen must be on the board by your fourth turn."))+'</p>';
+ if(g.lastMove&&!g.over)body+='<p class="micro last-move"><b>Computer played:</b> '+g.lastMove+'</p>';
+ else if(g.lastMove)body+='<p class="micro last-move"><b>Last move:</b> '+g.lastMove+'</p>';
+ body+='<div class="game-settings"><div class="subtle-label">'+I("layers",16)+'Your colour</div><div class="seg">'+seg("g-color-w",gpref.human==="w","White · moves first")+seg("g-color-b",gpref.human==="b","Black")+'</div>';
+ body+='<div class="subtle-label">'+I("chart",16)+'Difficulty</div><div class="seg">'+HiveAI.levels.map(l=>seg("g-level-"+l.id,gpref.level===l.id,l.name)).join("")+'</div><p class="micro">'+levelOf(gpref.level).about+'</p>';
+ body+='<div class="subtle-label">'+I("info",16)+'Expansion pieces</div><div class="exp-choices">'+EXP.map(([k,name,about])=>'<label class="exp-choice" title="'+about+'"><input type="checkbox" data-action="g-exp-'+k+'"'+(gpref.exp.includes(k)?" checked":"")+'><svg aria-hidden="true" width="24" height="24" viewBox="-24 -24 48 48" style="color:'+StudyBoard.colors[k][0]+'">'+Art.bug[k]+'</svg><span><b>'+name+'</b> <small>'+about+'</small></span></label>').join("")+'</div><p class="micro">Off by default. Each one adds one piece per side; the computer plays with the same set.</p>';
+ if(pending)body+='<p class="micro">These settings apply when you start a new game.</p>';
+ body+='</div></div>';
+ const actions='<div class="action-stack two">'+btn("g-new","New game","reset","green full")+'<button type="button" class="btn plain full" data-action="g-undo" '+(g.history.length?"":"disabled")+'>'+I("rotate",17)+'Undo move</button></div>';
+ return '<aside class="coach" aria-label="Game coach"><div class="desktop-title"><div class="panel-eyebrow"><span class="tag sage">'+I("surround",14)+'Practice game</span><span class="meta">'+lv.name+' · Turn '+turnNo+'</span></div><h2>You ('+colourName(g.human)+') vs computer</h2><p class="goal">Surround the computer’s queen before it surrounds yours.</p></div>'+body+actions+'</aside>';
+}
+function playPage(){
+ if(!g)newGame();
+ return '<div class="hero"><div><h1>Play vs computer</h1><p>'+(g.exp.length?'A full game of Hive with the '+g.exp.map(k=>expName(k).toLowerCase()).join(", ").replace(/, ([^,]*)$/," and $1")+' against the computer.':'A full game of base Hive against the computer.')+' Choose your colour and difficulty.</p></div></div><div class="workspace"><div class="mobile-task"><div><span class="tag sage">'+I("surround",14)+'Practice game</span><h2>You ('+colourName(g.human)+') vs computer</h2></div><p>'+gStatus()+'</p></div>'+playBoard()+playCoach()+'</div>';
+}
+function playAction(a){
+ if(a==="g-reserve")return reserve(g);
+ if(a==="g-flip")g.flip=!g.flip;
+ if(a==="g-new")newGame();
+ if(a==="g-undo"){const h=g.history.pop();if(h){gTok++;Object.assign(g,{lastM:null},h,{over:null});gTurn();notify("Move undone. "+gStatus())}}
+ if(a==="g-pass"&&!g.over&&!g.thinking&&g.side===g.human&&!g.legal.length){g.history.push(gSnap());g.passes++;g.ply++;g.lastM=null;g.lastMove="";g.info="You passed.";gTurn();notify("You passed. "+gStatus())}
+ const set=a.match(/^g-(color|level)-(\w+)$/);
+ if(set){if(set[1]==="color")gpref.human=set[2];else gpref.level=set[2];if(!g.history.length&&!g.over&&(g.human!==gpref.human||g.level!==gpref.level))newGame()}
+ const ex=a.match(/^g-exp-([MLP])$/);
+ if(ex){const on=new Set(gpref.exp);on.has(ex[1])?on.delete(ex[1]):on.add(ex[1]);gpref.exp=EXP.map(e=>e[0]).filter(k=>on.has(k));if(!g.history.length&&!g.over)newGame()}
  render();
 }
 function render(){
  const p=page(),active=document.activeElement;
  const prev=active&&active!==document.body?["data-cell","data-action","data-answer"].map(k=>[k,active.getAttribute(k)]).find(([k,v])=>v!==null):null;
- byId("editionLabel").textContent=p==="openers"?"Opening study":p!=="practice"?"Study guide":course(s.id).stage===5?"Expansion study":"Base game";
- main.innerHTML=p==="guide"?guide():p==="progress"?stats():p==="openers"?openersPage():practice();
+ byId("editionLabel").textContent=p==="openers"?"Opening study":p==="play"?"Practice game":p!=="practice"?"Study guide":course(s.id).stage===5?"Expansion study":"Base game";
+ main.innerHTML=p==="guide"?guide():p==="progress"?stats():p==="openers"?openersPage():p==="play"?playPage():practice();
  document.querySelectorAll("[data-nav]").forEach(a=>{const on=a.dataset.nav===p;a.classList.toggle("active",on);if(on)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current")});
  if(prev){const el=main.querySelector('['+prev[0]+'="'+prev[1]+'"]:not(:disabled)');if(el)el.focus({preventScroll:true})}
- document.title=(p==="practice"?"Tactics studio":p==="guide"?"Field guide":p==="openers"?"Openers trainer":"Your progress")+" · Hive Study";
+ document.title=(p==="practice"?"Tactics studio":p==="guide"?"Field guide":p==="openers"?"Openers trainer":p==="play"?"Play vs computer":"Your progress")+" · Hive Study";
 }
 function solutionText(){
  const m=s.legal.find(correct);if(!m)return "Try the next position.";
@@ -1217,6 +1847,7 @@ function play(m){
 }
 function cell(k){
  if(page()==="openers")return openerCell(k);
+ if(page()==="play")return gCell(k);
  if(s.mode!=="move")return;
  const move=s.selected&&s.legal.find(m=>m.id===s.selected&&m.to===k);
  if(move){play(move);return}
@@ -1230,13 +1861,14 @@ function cell(k){
  notify(s.info||"Piece deselected.");render();
 }
 function reserve(st=s){
- const choices=R.available(st.base,st.side,st.ply);
- byId("reserveList").innerHTML=choices.map(id=>'<button class="btn reserve-choice" data-reserve="'+id+'"><span><svg aria-hidden="true" width="27" height="27" viewBox="-24 -24 48 48" style="color:'+StudyBoard.colors[id[1]][0]+'">'+Art.bug[id[1]]+'</svg>'+R.names[id[1]]+'</span><small>'+(R.stock[id[1]]-Number(id.slice(2))+1)+' left</small></button>').join("")||'<p>All your pieces are on the board.</p>';
+ const choices=R.available(st.base,st.side,st.ply,st===g?gOpts():undefined);
+ byId("reserveList").innerHTML=choices.map(id=>'<button class="btn reserve-choice" data-reserve="'+id+'"'+(R.names[id[1]]?'':' title="'+expAbout(id[1])+'"')+'><span><svg aria-hidden="true" width="27" height="27" viewBox="-24 -24 48 48" style="color:'+StudyBoard.colors[id[1]][0]+'">'+Art.bug[id[1]]+'</svg>'+expName(id[1])+(R.names[id[1]]?'':' <em class="exp-tag">expansion</em>')+'</span><small>'+((R.stock[id[1]]||R.expansionStock[id[1]])-Number(id.slice(2))+1)+' left</small></button>').join("")||'<p>All your pieces are on the board.</p>';
  dialog.showModal();
 }
 function startCourse(id){mixed=false;queue=null;const c=Courses.find(x=>x.id===id);begin(c.ids.find(k=>!progress[k])||c.ids[0]);window.scrollTo(0,0)}
 function action(a){
  if(a.startsWith("o-"))return openerAction(a);
+ if(a.startsWith("g-"))return playAction(a);
  if(a==="reserve")return reserve();
  if(a==="flip"){s.flip=!s.flip;render();return}
  if(a==="hint"||a==="reveal"){
@@ -1277,11 +1909,11 @@ main.addEventListener("click",e=>{
 main.addEventListener("keydown",e=>{if(["Enter"," "].includes(e.key)&&e.target.hasAttribute("data-cell")){e.preventDefault();cell(e.target.dataset.cell)}});
 dialog.addEventListener("click",e=>{
  const b=e.target.closest("[data-reserve]");
- if(b){const st=page()==="openers"?o:s;st.selected=b.dataset.reserve;st.solution=false;st.info="Choose a highlighted placement for your reserve "+R.names[st.selected[1]].toLowerCase()+".";dialog.close();render();notify(st.info)}
+ if(b){const st=page()==="openers"?o:page()==="play"?g:s;st.selected=b.dataset.reserve;st.solution=false;st.info="Choose a highlighted placement for your reserve "+expName(st.selected[1]).toLowerCase()+".";dialog.close();render();notify(st.info)}
  else if(e.target.closest("#closeReserve")||e.target===dialog)dialog.close();
 });
 window.addEventListener("hashchange",()=>{render();window.scrollTo(0,0)});
-window.addEventListener("storage",e=>{if(e.key===key){progress=readProgress();render()}if(e.key===okey){oprog=readOpeners();render()}});
+window.addEventListener("storage",e=>{if(e.key===key){progress=readProgress();render()}if(e.key===okey||e.key===bkey){oprog=readOpeners();bprog=readBranches();render()}});
 byId("mark").innerHTML=Art.mark;document.querySelectorAll("[data-icon]").forEach(el=>el.innerHTML=I(el.dataset.icon,18));
 const first=ids.find(id=>!progress[id])||ids[0];const initialPage=page();
 if(initialPage==="practice")begin(first);

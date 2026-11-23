@@ -1,7 +1,10 @@
 // Real-browser end-to-end check of the Openers trainer in headless Microsoft Edge, driven over the
 // Chrome DevTools Protocol with Node's built-in WebSocket (Node 22+). No npm packages.
 // Every action is a real mouse click (Input.dispatchMouseEvent) at the on-screen position of a board
-// cell or button; app functions are never called. Move cells come from hive-study/dist/openers.js.
+// cell or button; app functions are never called (step h sets up its position at a breakpoint).
+// Step g plays a few moves against the computer (Easy) on #play; the live site may not have #play yet.
+// Step h checks the human Pass button on a constructed stuck position (set up through the Undo snapshot).
+// Steps i and j turn on the expansion pieces, use the pillbug's ability by clicking, and check the freeze rule.
 //   node study-work/browser-check.cjs          -> local Hive-Study.html (file:///)
 //   node study-work/browser-check.cjs --live   -> https://sam-jennings.github.io/hive-trainer/Hive-Study.html
 // Screenshots and the JSON result go to $KIROCREW_SCRATCH/browser-check/<local|live>/.
@@ -21,7 +24,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const data = vm.createContext({});
 vm.runInContext(["rules.js", "openers.js"].map(f => fs.readFileSync(path.join(ROOT, "hive-study", "dist", f), "utf8")).join("\n") + ";this.R=HiveRules;this.O=Openers;", data);
 const { R, O } = data;
-const legend = id => (id[0] === "w" ? "White " : "Black ") + R.names[id[1]].toLowerCase() + " " + id.slice(2);
+const legend = id => (id[0] === "w" ? "White " : "Black ") + (R.names[id[1]] || R.expansionNames[id[1]]).toLowerCase() + " " + id.slice(2);
 const byId = id => O.find(x => x.id === id) || (() => { throw new Error("opener " + id + " missing from openers.js") })();
 
 const EDGE = ["C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"].find(p => fs.existsSync(p));
@@ -29,7 +32,7 @@ if (!EDGE) { console.error("Microsoft Edge not found"); process.exit(2); }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const results = [], errors = [], exceptions = [];
-let edge, ws, seq = 0, shot = 0;
+let edge, ws, seq = 0, shot = 0, onPaused = null;
 const pending = new Map();
 
 function send(method, params = {}) {
@@ -108,6 +111,28 @@ async function playMove([piece, to]) {
 }
 const solvedLine = n => n + " of " + O.length + " openers solved";
 
+// Set up a constructed Play position. app.js keeps its state inside a closure, so the setup runs at a
+// breakpoint on the Undo handler: a real Undo click pauses there, the last Undo snapshot is replaced
+// (data only, no app function is called), and the handler then restores it.
+async function undoInto(snapshot) {
+  const src = LIVE ? await (await fetch(URL_.replace(/#.*$/, ""))).text() : fs.readFileSync(path.join(__dirname, "..", "Hive-Study.html"), "utf8");
+  const lines = src.split("\n"), lineNumber = lines.findIndex(l => l.includes('if(a==="g-undo")'));
+  if (lineNumber < 0) throw new Error("Undo handler not found in the page source");
+  const columnNumber = lines[lineNumber].indexOf('if(a==="g-undo")');
+  await send("Debugger.enable");
+  const bp = await send("Debugger.setBreakpointByUrl", { urlRegex: "Hive-Study\\.html", lineNumber, columnNumber });
+  const paused = new Promise(res => { onPaused = res; });
+  const click = clickEl('[data-action="g-undo"]');
+  const frame = await Promise.race([paused, sleep(5000).then(() => null)]);
+  if (!frame) throw new Error("Undo click did not reach the breakpoint");
+  const set = await send("Debugger.evaluateOnCallFrame", { callFrameId: frame.callFrames[0].callFrameId, returnByValue: true,
+    expression: `(g.history[g.history.length - 1] = ${JSON.stringify(snapshot)}, true)` });
+  await send("Debugger.removeBreakpoint", { breakpointId: bp.breakpointId });
+  await send("Debugger.resume"); await click; await send("Debugger.disable"); onPaused = null;
+  if (set.result?.value !== true) throw new Error("could not set up the position: " + JSON.stringify(set.exceptionDetails || set.result));
+}
+const STEPS = 12;
+
 async function step(name, fn) {
   const t0 = Date.now();
   try { const notes = await fn(); results.push({ step: name, pass: true, ms: Date.now() - t0, notes: notes || "" }); console.log("PASS " + name); }
@@ -131,6 +156,7 @@ async function run() {
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     if (m.id && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); m.error ? p.rej(new Error(p.method + ": " + m.error.message)) : p.res(m.result); return; }
+    if (m.method === "Debugger.paused" && onPaused) { onPaused(m.params); return; }
     if (m.method === "Runtime.exceptionThrown") exceptions.push(m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text);
     if (m.method === "Runtime.consoleAPICalled" && ["error", "assert"].includes(m.params.type)) errors.push("console." + m.params.type + ": " + m.params.args.map(a => a.value ?? a.description).join(" "));
     if (m.method === "Log.entryAdded" && m.params.entry.level === "error") errors.push("log(" + m.params.entry.source + "): " + m.params.entry.text + (m.params.entry.url ? " " + m.params.entry.url : ""));
@@ -234,17 +260,212 @@ async function run() {
     return pick.id + ": clicked at scrollY " + Math.round(p.scrollY) + ", board rect top " + Math.round(r.top) + " bottom " + Math.round(r.bottom) + " of viewport " + r.vh + ", scrollY now " + Math.round(r.scrollY);
   });
 
+  await step("f branching line through two branches", async () => {
+    const x = byId("f-attack-branch"), n = 3, seen = [];
+    const routeOf = name => x.steps[0].then.branches.find(b => b.name === name);
+    for (let run = 1; run <= 2; run++) {
+      if (run === 1) await clickEl(`[data-opener="${x.id}"]`); else await clickEl('[data-action="o-replay"]');
+      await waitText([x.name, "Move 1 of " + n]);
+      await playMove(bookOf(x.steps[0]).moves[0]);
+      const t = await waitText(["Black replied:", "Move 2 of " + n]);
+      const m = t.match(/Branch (\d+) of (\d+): ([^\n]+?)\. Your next move/);
+      if (!m) throw new Error("branch taken is not shown");
+      const br = routeOf(m[3]);
+      if (!br) throw new Error("unknown branch '" + m[3] + "'");
+      if (seen.includes(br.name)) throw new Error("Replay repeated the solved branch '" + br.name + "'");
+      seen.push(br.name);
+      const [p, to] = br.move;
+      const onBoard = await evaluate(`!!document.querySelector('.board-plane [data-cell="${to}"][aria-label="${legend(p)} at ${to}"]')`);
+      if (!onBoard) throw new Error("branch reply " + p + " not drawn at " + to);
+      if (run === 1) await screenshot("branch-1-reply");
+      for (let k = 0; k < br.steps.length; k++) {
+        const st = br.steps[k];
+        await playMove(bookOf(st).moves[0]);
+        if (st.then) await waitText(["Black replied: " + legend(st.then.move[0]) + " to (" + st.then.move[1] + ")", "Move " + (k + 3) + " of " + n]);
+      }
+      const done = await waitText(["Line summary", "Branch path:", br.name, "Branches solved: " + run + " of 2"]);
+      const firstTry = (done.match(/Book move, first try/g) || []).length;
+      if (firstTry !== n) throw new Error("summary shows " + firstTry + " of " + n + " steps as 'Book move, first try'");
+      const card = await evaluate(`document.querySelector('[data-opener="${x.id}"] .mini-progress').innerText.trim()`);
+      const want = run === 1 ? "1 of 2 branches" : "Found unaided · 2 of 2 branches";
+      if (card !== want) throw new Error("card says '" + card + "', expected '" + want + "'");
+      await waitText([solvedLine(run === 1 ? 3 : 4)]);
+      await screenshot("branch-" + run + "-summary");
+    }
+    return x.id + ": run 1 branch '" + seen[0] + "', Replay -> run 2 branch '" + seen[1] + "'; card '1 of 2 branches' then 'Found unaided · 2 of 2 branches', solved count 4";
+  });
+
   await step("d progress saved across reload", async () => {
     await send("Page.reload", { ignoreCache: true });
     await sleep(500);
-    const t = await waitText(["Opening library", solvedLine(3)], 15000);
+    const t = await waitText(["Opening library", solvedLine(4)], 15000);
     const card = id => evaluate(`document.querySelector('[data-opener="${id}"] .mini-progress').innerText.trim()`);
-    const got = { [single.id]: await card(single.id), [line.id]: await card(line.id), [help.id]: await card(help.id) };
-    const want = { [single.id]: "Found unaided", [line.id]: "Found unaided", [help.id]: "Found with guidance" };
+    const got = { [single.id]: await card(single.id), [line.id]: await card(line.id), [help.id]: await card(help.id), "f-attack-branch": await card("f-attack-branch") };
+    const want = { [single.id]: "Found unaided", [line.id]: "Found unaided", [help.id]: "Found with guidance", "f-attack-branch": "Found unaided · 2 of 2 branches" };
     for (const k in want) if (got[k] !== want[k]) throw new Error(k + " card says '" + got[k] + "', expected '" + want[k] + "'");
     await evaluate(`document.querySelector(".section-head").scrollIntoView({ block: "start" })`);
     await screenshot("after-reload");
-    return "after reload: '" + solvedLine(3) + "'; cards " + JSON.stringify(got);
+    return "after reload: '" + solvedLine(4) + "'; cards " + JSON.stringify(got);
+  });
+
+  await step("g play vs computer (Easy): human moves and computer replies", async () => {
+    await send("Page.navigate", { url: URL_.replace(/#openers$/, "#play") });
+    await waitText(["Play vs computer", "Your move · White", "You (White) vs computer", "Easy · Turn 1"], 15000);
+    await clickEl('[data-action="g-level-easy"]'); await clickEl('[data-action="g-color-w"]');
+    const pieces = () => evaluate(`[...document.querySelectorAll(".board-plane .board-piece[data-cell]")].map(g => g.getAttribute("aria-label"))`);
+    const firstSpot = () => evaluate(`document.querySelector(".board-plane g.destination[data-cell]")?.dataset.cell || null`);
+    const place = async id => {
+      await clickEl('[data-action="g-reserve"]'); await clickEl(`dialog [data-reserve="${id}"]`);
+      await waitText("Choose a highlighted placement");
+      const to = await firstSpot(); if (!to) throw new Error("no legal placement shown for " + id);
+      await clickCell(to); return id + " drop " + to;
+    };
+    const waitReply = async turn => {
+      const end = Date.now() + 8000;
+      while (Date.now() < end) {
+        const t = await pageText();
+        if (t.includes("Easy · Turn " + turn) && t.includes("Your move · White") && t.includes("Computer played:")) return pieces();
+        await sleep(100);
+      }
+      throw new Error("computer did not reply (expected 'Easy · Turn " + turn + "' and 'Your move · White')");
+    };
+    const log = [];
+    log.push(await place("wG1"));
+    let p = await waitReply(2);
+    if (p.length !== 2 || !p.some(l => l.startsWith("Black "))) throw new Error("expected wG1 and one black piece after the computer's reply: " + JSON.stringify(p));
+    await screenshot("play-first-reply");
+    log.push(await place("wQ1"));
+    p = await waitReply(3);
+    const atTurn3 = p.length;   // 3 or 4: the computer may move its queen instead of placing
+    // Third human move: a board move with the queen if it has one, otherwise another placement.
+    const qCell = await evaluate(`[...document.querySelectorAll(".board-plane .board-piece[data-cell]")].find(g => g.getAttribute("aria-label").startsWith("White queen 1 at"))?.dataset.cell || null`);
+    await clickCell(qCell);
+    const qt = await waitText("White queen 1");
+    const to = await firstSpot();
+    if (to && /legal destination/.test(qt)) { await clickCell(to); log.push("wQ1 " + qCell + "->" + to); }
+    else { await clickCell(qCell); log.push(await place("wA1")); }
+    await waitReply(4);
+    const reply = (await pageText()).match(/Computer played: ([^\n]+)/)[1];
+    await screenshot("play-third-reply");
+    await clickEl('[data-action="g-undo"]');
+    await waitText(["Easy · Turn 3", "Your move · White"]);
+    const afterUndo = (await pieces()).length;
+    if (afterUndo !== atTurn3) throw new Error("Undo should restore the " + atTurn3 + " pieces of turn 3, board has " + afterUndo);
+    await clickEl('[data-action="g-new"]');
+    await waitText(["Your move · White", "Easy · Turn 1"]);
+    if ((await pieces()).length !== 0) throw new Error("New game did not clear the board");
+    return "human " + log.join(", ") + "; computer replied 3 times (last: " + reply + "); Undo -> " + atTurn3 + " pieces; New game -> empty board";
+  });
+
+  await step("h human pass: no legal move -> Pass the turn -> the computer moves on", async () => {
+    // Being stuck is rare in real play, so the position is constructed: after one real move, the
+    // Undo snapshot is replaced (data only, no app function is called) with a turn-3 position where
+    // the white queen is pinned between two black pieces and every empty edge cell touches Black.
+    // The real Undo click then restores it, and the rest is real clicks.
+    await waitText(["Your move · White", "Easy · Turn 1"]);
+    await clickEl('[data-action="g-reserve"]'); await clickEl('dialog [data-reserve="wG1"]');
+    await waitText("Choose a highlighted placement");
+    await clickCell(await evaluate(`document.querySelector(".board-plane g.destination[data-cell]").dataset.cell`));
+    await waitText(["Easy · Turn 2", "Computer played:"], 8000);
+    const stuck = { "-1,0": ["bA1"], "0,0": ["wQ1"], "1,0": ["bQ1"] };
+    await undoInto({ board: stuck, ply: 4, last: null, lastMove: "", passes: 0, info: "" });
+    await waitText(["Easy · Turn 3", "You have no legal move, so you must pass.", "Pass the turn"]);
+    if ((await evaluate(`!!document.querySelector('[data-action="g-reserve"]').disabled`)) !== true) throw new Error("Reserve should be disabled when there is no legal move");
+    await screenshot("play-must-pass");
+    await clickEl('[data-action="g-pass"]');
+    const end = Date.now() + 8000; let t = "";
+    while (Date.now() < end) { t = await pageText(); if (t.includes("Easy · Turn 4") && !t.includes("thinking")) break; await sleep(100); }
+    if (!t.includes("Easy · Turn 4")) throw new Error("game did not move on to turn 4 after the pass");
+    if (/Game over|Draw\./.test(t)) throw new Error("the pass ended the game");
+    const reply = (t.match(/Computer played: ([^\n]+)/) || [])[1];
+    if (!reply) throw new Error("the computer did not play after the pass");
+    const n = (await evaluate(`document.querySelectorAll(".board-plane .board-piece[data-cell]").length`));
+    if (n !== 3 && n !== 4) throw new Error("expected 3 or 4 pieces after the computer's reply, board has " + n);
+    await screenshot("play-after-pass");
+    const again = t.includes("Pass the turn") ? "still stuck, Pass offered again" : "White has moves again";
+    return "turn 3 stuck position -> 'Pass the turn' shown, Reserve disabled; Pass clicked -> computer played " + reply + "; Turn 4, " + again;
+  });
+
+  // Shared by steps i and j: wait until the computer has replied and it is White's turn number `turn`.
+  const waitWhite = async turn => {
+    const end = Date.now() + 8000; let t = "";
+    while (Date.now() < end) { t = await pageText(); if (t.includes("Easy · Turn " + turn) && t.includes("Your move · White")) return t; await sleep(100); }
+    throw new Error("expected 'Easy · Turn " + turn + "' and 'Your move · White'");
+  };
+  const abilitySpots = () => evaluate(`[...document.querySelectorAll(".board-plane g.destination.ability[data-cell]")].map(g => g.dataset.cell)`);
+  const pieceAt = cell => evaluate(`document.querySelector('.board-plane .board-piece[data-cell="${cell}"]')?.getAttribute("aria-label") || null`);
+
+  await step("i expansions on: pieces in reserve, place a pillbug, use its ability by clicking", async () => {
+    // Turn all three on by clicking the checkboxes; a game is in progress, so they apply on New game.
+    for (const k of ["M", "L", "P"]) {
+      await clickEl(`input[data-action="g-exp-${k}"]`);
+      if (!(await evaluate(`document.querySelector('input[data-action="g-exp-${k}"]').checked`))) throw new Error("checkbox " + k + " not checked after click");
+    }
+    await waitText("These settings apply when you start a new game.");
+    await clickEl('[data-action="g-new"]');
+    await waitText(["with the mosquito, ladybug and pillbug against the computer", "Easy · Turn 1", "Your move · White"]);
+    await clickEl('[data-action="g-reserve"]');
+    const reserve = await evaluate(`[...document.querySelectorAll("dialog [data-reserve]")].map(b => b.dataset.reserve + "|" + (b.title || ""))`);
+    for (const id of ["wM1", "wL1", "wP1"]) {
+      const r = reserve.find(x => x.startsWith(id + "|"));
+      if (!r) throw new Error(id + " missing from the reserve: " + JSON.stringify(reserve));
+      if (r.length < id.length + 20) throw new Error(id + " has no rules tooltip in the reserve");
+    }
+    await screenshot("expansions-reserve");
+    // First real move (needed for an Undo snapshot), then set up turn 3: wG1 -1,0, wQ1 0,0, bQ1 1,0.
+    await clickEl('dialog [data-reserve="wQ1"]'); await waitText("Choose a highlighted placement");
+    await clickCell(await evaluate(`document.querySelector(".board-plane g.destination[data-cell]").dataset.cell`));
+    await waitWhite(2);
+    await undoInto({ board: { "-1,0": ["wG1"], "0,0": ["wQ1"], "1,0": ["bQ1"] }, ply: 4, last: null, lastM: null, lastMove: "", passes: 0, info: "" });
+    await waitWhite(3);
+    // Place the pillbug next to both white pieces through the Reserve dialog.
+    await clickEl('[data-action="g-reserve"]'); await clickEl('dialog [data-reserve="wP1"]');
+    await waitText("Choose a highlighted placement for your reserve pillbug.");
+    await clickCell("0,-1");
+    await waitWhite(4);
+    if (!(await pieceAt("0,-1"))?.startsWith("White pillbug 1")) throw new Error("pillbug not drawn at 0,-1");
+    const reply1 = (await pageText()).match(/Computer played: ([^\n]+)/)?.[1];
+    // Select the grasshopper next to the pillbug: violet move-with-pillbug targets appear.
+    await clickCell("-1,0");
+    await waitText("move-with-pillbug target");
+    const spots = await abilitySpots();
+    if (!spots.length) throw new Error("no move-with-pillbug targets drawn for wG1");
+    const style = await evaluate(`document.querySelector('.board-plane g.destination.ability .spot-outline').getAttribute("stroke")`);
+    if (style !== "#d2b8ff") throw new Error("ability targets not in the distinct violet style (stroke " + style + ")");
+    await screenshot("pillbug-targets");
+    await clickCell(spots[0]);
+    if (!(await pieceAt(spots[0]))?.startsWith("White grasshopper 1")) throw new Error("wG1 not moved to " + spots[0] + " by the pillbug");
+    if (await pieceAt("-1,0")) throw new Error("-1,0 should be empty after the pillbug lifted wG1");
+    await waitWhite(5);
+    await screenshot("pillbug-used");
+    return "M/L/P checkboxes on -> New game; reserve lists wM1, wL1, wP1 with tooltips; wP1 placed at 0,-1 (computer: " + reply1 + "); wG1 selected -> " + spots.length + " violet targets " + spots.join(" ") + "; clicked " + spots[0] + " -> wG1 moved by the pillbug";
+  });
+
+  await step("j frozen piece can't be pillbug-moved; Undo restores the freeze", async () => {
+    // Black's ant just moved (2,-1 -> 1,-1) next to the white pillbug; the black spider next to it did not.
+    const board = { "0,0": ["wQ1"], "0,-1": ["wP1"], "1,0": ["bQ1"], "1,-1": ["bA1"], "-1,-1": ["bS1"] };
+    await undoInto({ board, ply: 8, last: "1,-1", lastM: { id: "bA1", from: "2,-1", to: "1,-1" }, lastMove: "Black ant 1 from (2,-1) to (1,-1)", passes: 0, info: "" });
+    await waitWhite(5);
+    await clickCell("1,-1");
+    await waitText("Black ant 1 moved last turn, so a pillbug can't move it this turn.");
+    if ((await abilitySpots()).length) throw new Error("frozen bA1 shows move-with-pillbug targets");
+    await screenshot("frozen-ant");
+    // The spider, not frozen, can be moved by the same pillbug (so the position itself allows the ability).
+    await clickCell("-1,-1");
+    await waitText("move-with-pillbug target");
+    const spots = await abilitySpots();
+    if (!spots.length) throw new Error("bS1 (not frozen) shows no move-with-pillbug targets");
+    await clickCell(spots[0]);
+    if (!(await pieceAt(spots[0]))?.startsWith("Black spider 1")) throw new Error("bS1 not moved to " + spots[0]);
+    await waitWhite(6);
+    // Undo goes back to before the spider move, with the ant still frozen.
+    await clickEl('[data-action="g-undo"]');
+    await waitWhite(5);
+    if (!(await pieceAt("-1,-1"))?.startsWith("Black spider 1")) throw new Error("Undo did not put bS1 back");
+    await clickCell("1,-1");
+    await waitText("Black ant 1 moved last turn, so a pillbug can't move it this turn.");
+    if ((await abilitySpots()).length) throw new Error("after Undo, frozen bA1 shows move-with-pillbug targets");
+    return "bA1 (just moved) clicked -> frozen message, 0 targets; bS1 -> " + spots.length + " targets, moved to " + spots[0] + "; Undo -> bS1 back, bA1 still frozen";
   });
 }
 
@@ -257,7 +478,7 @@ async function run() {
     await sleep(500);
     try { fs.rmSync(PROFILE, { recursive: true, force: true }); } catch {}
   }
-  const pass = !fatal && results.length === 7 && results.every(r => r.pass) && exceptions.length === 0;
+  const pass = !fatal && results.length === STEPS && results.every(r => r.pass) && exceptions.length === 0 && (LIVE || errors.length === 0);
   const summary = { target: LIVE ? "live" : "local", url: URL_, pass, fatal, steps: results, consoleErrors: errors, uncaughtExceptions: exceptions, screenshots: OUT };
   fs.writeFileSync(path.join(OUT, "result.json"), JSON.stringify(summary, null, 1));
   console.log((pass ? "ALL PASS" : "FAILED") + " (" + summary.target + "): " + results.filter(r => r.pass).length + "/" + results.length + " steps, " + errors.length + " console errors, " + exceptions.length + " uncaught exceptions. Screenshots: " + OUT);

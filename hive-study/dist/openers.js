@@ -253,4 +253,209 @@ const Openers = [
     ]}
   ]}
 ];
+// ---- Branching lines (OPENERS-BRANCHING-NOTES.md). A step's then may hold branches[] instead of
+// move: the computer plays one branch's move (the screen picks a branch not solved yet), and the line
+// continues with that branch's own steps[] (2+ learner moves each). A branching step is the last of
+// its steps[]. check-openers.cjs replays every branch path. Shared replies are reused from the lines
+// above so the grading stays identical where the position is the same.
+{
+ const line = id => Openers.find(x => x.id === id).steps;
+ const zA = line("z-attack-line"), zD = line("z-defence-line"), fA = line("f-attack-line");
+ const wl = Openers.find(x => x.id === "white-last"), xa = Openers.find(x => x.id === "x-answer");
+ const secondAnt = (pin, extra) => ({goal:"Move 3: keep the pin and add to the attack.",
+  hint:"Your pinning ant is doing its job. Don't move it again; bring in a new bug instead.",
+  other:"Moving the pinning ant again frees the black queen and wastes a tempo (pp. 217-218).",
+  replies:[
+   {name:"Second ant",verdict:"best",pins:pin,moves:[["wA2","-1,0"],["wA2","0,-1"],["wA2","-1,2"],["wA2","-2,2"],["wA2","-2,1"]],why:"The pin stays and a second free ant joins the attack. Z Opening games often go to the side with the most free ants (p. 225)."},
+   {name:"Other new bug",verdict:"playable",pins:pin,moves:[["wS1","-1,2"],["wG2","-1,2"],["wB1","-1,2"]],why:"The pin stays, which is what matters. An ant is more mobile, so it adds more to the attack."},
+   {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:extra,why:"Moving the same bug twice loses a tempo and frees the black queen (pp. 217-218)."}]});
+ Openers.push(
+ {id:"z-attack-branch",group:"Branching line",pages:"29-30, 217-219, 225",
+  name:"Z Opening as White: answer Black's defender",
+  summary:"Black chose the Z Opening. Bring in your ant; Black then answers in one of three ways, and your pin depends on which.",
+  goal:"You are White. Play three moves of the Z Opening attack against Black's reply.",
+  hint:"White's opening goal: immobilise the black queen as fast as possible, and keep your ants free.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wQ1","-1,1"],["bQ1","2,-1"]],
+  other:"That move does not help the attack on the black queen.",
+  steps:[
+   {goal:"Move 1: bring in the bug that will attack the black queen.",hint:zA[0].hint,other:zA[0].other,replies:zA[0].replies,
+    then:{branches:[
+     {name:"Spider beside queen and hopper",move:["bS1","2,0"],why:"Black's spider touches the queen and the first hopper. Two spaces still touch only the black queen.",
+      steps:[zA[1],secondAnt("bQ1",[["wA1","3,-1"],["wA1","1,-1"]])]},
+     {name:"Ant on the far side of the queen",move:["bA1","3,-1"],why:"Black's ant touches only the queen, so Black has pinned her own queen: she cannot move without cutting the ant off. The ant itself is free.",
+      steps:[
+       {goal:"Move 2: the black queen is already stuck. Deal with Black's free ant.",
+        hint:"A bug that touches only Black's ant pins it, and the queen stays stuck as long as the ant hangs on her.",
+        other:"Black's ant is still free to run round the hive.",
+        replies:[
+         {name:"Pin Black's ant",verdict:"best",pins:["bQ1","bA1"],moves:[["wA1","4,-1"],["wA1","3,0"],["wA1","4,-2"]],why:"Your ant touches only Black's ant, so neither the ant nor the queen can move. Black is left with no free ant (p. 225: free ants decide Z Openings)."},
+         {name:"Second ant first",verdict:"playable",pins:"bQ1",frees:"bA1",moves:[["wA2","-1,0"],["wA2","0,-1"],["wA2","-2,2"],["wA2","-2,1"]],why:"The queen stays stuck, but Black's ant is free to pin one of your attackers."},
+         {name:"Pin the queen as well",verdict:"weak",pins:"bQ1",frees:"bA1",moves:[["wA1","2,-2"],["wA1","3,-2"]],why:"The queen is already stuck, so this spends the move on nothing new and leaves Black's ant free."},
+         {name:"Ant beside queen and first hopper",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"]],why:"This space links Black's ant to the rest of the hive, so the black queen is free again."}],
+        then:{move:["bS1","1,1"],why:"Black adds a spider on the far side of the first hopper."}},
+       {goal:"Move 3: keep both pins and add to the attack.",
+        hint:"Both black bugs are held by your one ant. Leave it there and bring in a new bug.",
+        other:"Moving the pinning ant again frees Black's ant and wastes a tempo.",
+        replies:[
+         {name:"Second ant",verdict:"best",pins:["bQ1","bA1"],moves:[["wA2","-1,0"],["wA2","0,-1"],["wA2","-1,2"],["wA2","-2,2"],["wA2","-2,1"]],why:"Both pins stay and a second free ant joins the attack."},
+         {name:"Other new bug",verdict:"playable",pins:["bQ1","bA1"],moves:[["wS1","-1,2"],["wG2","-1,2"],["wB1","-1,2"]],why:"Both pins stay. An ant would add more mobility."},
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"]],why:"Your ant now links Black's ant to the hive, so the queen and the ant are both free, and you moved the same bug twice."}]}]},
+     {name:"Spider behind the first hopper",move:["bS1","1,1"],why:"Black's spider touches only the first hopper, so all three of the queen's open sides away from it touch nothing else.",
+      steps:[
+       {goal:"Move 2: stop the black queen from moving.",
+        hint:"Find a space that touches the black queen and nothing else. There are more of them now than in the spider-beside-queen branch.",
+        other:"That move leaves the black queen free to move. Look for a space that touches the queen and nothing else.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","3,-1"],["wA1","2,-2"],["wA1","3,-2"]],why:"Your ant touches only the black queen, so she cannot move. With the spider away from her, (3,-1) pins too."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-2,3"],["wS1","-2,3"],["wG2","-2,3"]],why:"More bugs help later, but the black queen can still walk to safety. Pin her first."},
+         {name:"Ant beside queen and hopper",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"],["wA1","1,-1"]],why:"The ant also touches other bugs, so the hive stays connected without the queen. She can still slide away."}],
+        then:{move:["bA1","2,1"],why:"Black gets an ant into play behind the spider (p. 30)."}},
+       secondAnt("bQ1",[["wA1","2,0"],["wA1","1,-1"]])]}]}}
+  ]},
+
+ {id:"f-attack-branch",group:"Branching line",pages:"29-30, 224, 226",
+  name:"F Opening as White: pin whichever side is open",
+  summary:"Black answered your elbow queen with an inline queen (F Opening). After your ant comes in, Black covers one side of the queen, and the pinning space depends on which.",
+  goal:"You are White. Play three moves against the F Opening.",
+  hint:"Pin the black queen fast, then bring in more ants.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wQ1","-1,1"],["bQ1","2,0"]],
+  other:"That move does not press White's advantage.",
+  steps:[
+   {goal:"Move 1: bring in the bug that will attack the black queen.",hint:fA[0].hint,other:fA[0].other,replies:fA[0].replies,
+    then:{branches:[
+     {name:"Spider in the upper elbow",move:["bS1","2,-1"],why:"Black adds a spider beside the queen, as in the book's F Opening example (spider and ant defenders).",
+      steps:[fA[1],fA[2]]},
+     {name:"Ant in the lower elbow",move:["bA1","1,1"],why:"Black's ant touches the queen and the first hopper on the lower side, so the open pinning spaces move.",
+      steps:[
+       {goal:"Move 2: stop the black queen from moving.",
+        hint:"Black's ant covers the lower side. Find a space that touches the black queen and nothing else.",
+        other:"That move leaves the black queen free to move. Look for a space that touches the queen and nothing else.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","3,0"],["wA1","3,-1"]],why:"Your ant touches only the black queen, so she cannot move. (2,1) no longer pins in this branch, because Black's ant touches it."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","2,-1"]],why:"The ant also touches another black bug, so the queen can still slide away."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-2,3"],["wS1","-2,3"]],why:"Useful later, but the black queen is still free. Pin her first."}],
+        then:{move:["bS1","1,2"],why:"Black adds a spider behind the ant."}},
+       {goal:"Move 3: keep the pin and bring in more force.",hint:fA[2].hint,other:fA[2].other,
+        replies:[fA[2].replies[0],fA[2].replies[1],
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","2,-1"]],why:"You free the black queen and lose a tempo by moving the same bug twice (pp. 217-218)."}]}]}]}}
+  ]},
+
+ {id:"white-last-branch",group:"Branching line",pages:"29-30, 58, 217-218, 223-225",
+  name:"White places the queen last: Z, then pin",
+  summary:"Black placed the queen first, in the lower elbow. Choose the Z Opening, then pin the black queen with the ant you already have in play. Where the pin goes depends on Black's reply.",
+  goal:"You are White. Choose the opening, then attack the black queen.",
+  hint:"White wants an open game: queens on opposite sides of the centre line, then a fast pin.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wA1","-1,0"],["bQ1","1,1"]],
+  other:"That move gives away White's opening initiative.",
+  steps:[
+   {goal:"Move 1: place your queen to choose the opening.",hint:wl.hint,other:wl.other,replies:wl.replies,
+    then:{branches:[
+     {name:"Spider beside queen and hopper",move:["bS1","2,0"],why:"Black's spider touches the queen and the first hopper.",
+      steps:[
+       {goal:"Move 2: your ant can move now. Pin the black queen.",
+        hint:"Find a space that touches the black queen and nothing else.",
+        other:"That move leaves the black queen free to move.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","0,2"],["wA1","1,2"]],why:"Your ant touches only the black queen, so she cannot move."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","0,1"]],why:"The ant also touches the spider or the first bugs, so the queen can still slide away."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-1,-1"],["wS1","-1,-1"]],why:"More bugs help later, but the black queen is still free. Pin her first."}],
+        then:{move:["bA1","3,0"],why:"Black brings an ant into play behind the spider (p. 30)."}},
+       {goal:"Move 3: keep the pin and add to the attack.",
+        hint:"Your pinning ant is doing its job. Bring in a new bug.",
+        other:"Moving the pinning ant again frees the black queen and wastes a tempo (pp. 217-218).",
+        replies:[
+         {name:"Second ant",verdict:"best",pins:"bQ1",moves:[["wA2","-1,0"],["wA2","-1,-1"],["wA2","0,-2"],["wA2","1,-2"],["wA2","-1,1"]],why:"The pin stays and a second free ant joins the attack (p. 225)."},
+         {name:"Other new bug",verdict:"playable",pins:"bQ1",moves:[["wS1","-1,0"],["wG2","-1,0"],["wB1","-1,0"]],why:"The pin stays. An ant adds more mobility."},
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,1"],["wA1","0,1"]],why:"You free the black queen and move the same bug twice."}]}]},
+     {name:"Spider beside the first hopper only",move:["bS1","2,-1"],why:"Black's spider touches only the first hopper. The queen's side at (2,1) now touches nothing but her.",
+      steps:[
+       {goal:"Move 2: your ant can move now. Pin the black queen.",
+        hint:"Find a space that touches the black queen and nothing else. There is one more than when the spider sits beside her.",
+        other:"That move leaves the black queen free to move.",
+        replies:[
+         {name:"Ant pins the queen",verdict:"best",pins:"bQ1",moves:[["wA1","2,1"],["wA1","1,2"],["wA1","0,2"]],why:"Your ant touches only the black queen, so she cannot move. (2,1) works here because no black bug is next to it."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"],["wA1","0,1"]],why:"The ant also touches other bugs, so the queen can still slide away."},
+         {name:"Develop another bug",verdict:"playable",frees:"bQ1",moves:[["wA2","-1,-1"],["wS1","-1,-1"]],why:"More bugs help later, but the black queen is still free. Pin her first."}],
+        then:{move:["bA1","3,-1"],why:"Black brings an ant into play behind the spider (p. 30)."}},
+       {goal:"Move 3: keep the pin and add to the attack.",
+        hint:"Your pinning ant is doing its job. Bring in a new bug.",
+        other:"Moving the pinning ant again frees the black queen and wastes a tempo (pp. 217-218).",
+        replies:[
+         {name:"Second ant",verdict:"best",pins:"bQ1",moves:[["wA2","-1,0"],["wA2","-1,-1"],["wA2","0,-2"],["wA2","1,-2"],["wA2","-1,1"]],why:"The pin stays and a second free ant joins the attack (p. 225)."},
+         {name:"Other new bug",verdict:"playable",pins:"bQ1",moves:[["wS1","-1,0"],["wG2","-1,0"],["wB1","-1,0"]],why:"The pin stays. An ant adds more mobility."},
+         {name:"Move the pinning ant again",verdict:"weak",frees:"bQ1",moves:[["wA1","2,0"],["wA1","0,1"]],why:"You free the black queen and move the same bug twice."}]}]}]}}
+  ]},
+
+ {id:"x-answer-branch",group:"Branching line",pages:"29-31, 219, 224, 227",
+  name:"Answering an X Opening: queen, then react",
+  summary:"White opened with a hopper and an ant and held the queen back. Get your queen in, then answer whatever White does next.",
+  goal:"You are Black. Punish White's delayed queen.",
+  hint:"White's bugs cannot move until the white queen is down. Use the time.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wA1","-1,0"]],
+  other:"That move does not use White's lost tempo.",
+  steps:[
+   {goal:"Move 1: answer White's delayed queen.",hint:xa.hint,other:xa.other,replies:xa.replies,
+    then:{branches:[
+     {name:"White places the queen",move:["wQ1","-1,1"],why:"White gets the queen in at last, beside the hopper and the ant.",
+      steps:[
+       {goal:"Move 2: put a good defender next to your queen.",
+        hint:"The best defenders can jump or climb out of a closed space. Put one where it touches your queen and your first hopper.",
+        other:"That bug does not defend your queen.",
+        replies:[
+         {name:"Hopper beside queen and first bug",verdict:"best",frees:"bQ1",moves:[["bG2","2,0"]],why:"A hopper can jump out later to counter-attack, and because it also touches your first hopper your queen stays mobile (p. 30)."},
+         {name:"Beetle beside queen and first bug",verdict:"playable",frees:"bQ1",moves:[["bB1","2,0"]],why:"A beetle also defends well, but you have only two and they are slow attackers."},
+         {name:"Spider as defender",verdict:"weak",moves:[["bS1","2,0"]],why:"Spiders make poor defenders: they are easily pinned or blocked (p. 219)."},
+         {name:"Ant first",verdict:"playable",moves:[["bA1","2,0"],["bA1","2,1"],["bA1","1,2"],["bA1","3,-1"],["bA1","2,-2"]],why:"Ants in play is part of the plan, but set up the defender while there is room next to the queen."}],
+        then:{move:["wS1","-2,1"],why:"White adds a spider beside the ant."}},
+       {goal:"Move 3: get an ant into play.",
+        hint:"Ants are the best defenders of the whole hive. Bring one in and keep your hopper where it is.",
+        other:"Bring in an ant while your hopper stays next to the queen.",
+        replies:[
+         {name:"Ant into play",verdict:"best",moves:[["bA1","1,1"],["bA1","1,2"],["bA1","2,1"],["bA1","3,0"],["bA1","3,-1"],["bA1","2,-1"],["bA1","2,-2"],["bA1","3,-2"]],why:"A free ant can run round the hive to pin White's attackers or block an attack (p. 30)."},
+         {name:"Another new bug",verdict:"playable",moves:[["bS1","3,0"],["bB1","3,0"]],why:"Developing is fine, but an ant gives Black the most mobility."},
+         {name:"Pull the defender away",verdict:"weak",moves:[["bG2","-2,0"]],why:"Your hopper leaves the queen without a defender, and you spend a tempo moving a bug twice."}]}]},
+     {name:"White delays the queen again",move:["wS1","-2,1"],why:"White holds the queen back once more. The rules force White to place it next turn, and until then no white bug can move.",
+      steps:[
+       {goal:"Move 2: White's bugs still cannot move. Bring in your fastest bug.",
+        hint:"Which bug could reach any space next to White's queen once she arrives?",
+        other:"That bug is slower than an ant.",
+        replies:[
+         {name:"Ant into play",verdict:"best",moves:[["bA1","2,0"],["bA1","2,-1"],["bA1","2,1"],["bA1","1,2"],["bA1","0,2"],["bA1","1,1"],["bA1","3,-1"],["bA1","2,-2"],["bA1","3,-2"]],why:"Your queen is down, so your ant is free from the next move on. White gets no free bug until the queen arrives (p. 227)."},
+         {name:"Defender first",verdict:"playable",moves:[["bG2","2,0"]],why:"A sound defender, but White cannot attack yet. An ant uses the tempo White gave you."},
+         {name:"Spider",verdict:"weak",moves:[["bS1","2,0"]],why:"A spider is slow, and spiders make poor defenders (p. 219)."}],
+        then:{move:["wQ1","-1,1"],why:"White must place the queen on turn four. She touches the hopper, the ant and the spider."}},
+       {goal:"Move 3: use your free ant against White's new queen.",
+        hint:"A bug that touches only the white queen pins her.",
+        other:"That move leaves the white queen free to move.",
+        replies:[
+         {name:"Ant pins the white queen",verdict:"best",pins:"wQ1",moves:[["bA1","-1,2"]],why:"Your ant touches only the white queen, so she cannot move. White's lost tempi have handed Black the first pin."},
+         {name:"Ant beside the queen, not a pin",verdict:"weak",frees:"wQ1",moves:[["bA1","-2,2"],["bA1","0,1"]],why:"The ant also touches other bugs, so the white queen can still move."},
+         {name:"Defender next to your queen",verdict:"playable",moves:[["bG2","2,0"],["bG2","3,-1"],["bG2","2,1"]],why:"Solid, but your free ant can do more right now."}]}]}]}}
+  ]},
+
+ {id:"z-defence-branch",group:"Branching line",pages:"30-31, 219, 223-225",
+  name:"Z Opening as Black: defend from either side",
+  summary:"White opened with a hopper and an elbow queen. Choose the Z Opening; White's ant then comes in from below or from above, and your last move depends on where it ends up.",
+  goal:"You are Black. Play three moves of a sound Black opening.",
+  hint:"Black's opening goals: queen early, a good defender next to her, and ants in play quickly.",
+  h:[["wG1","0,0"],["bG1","1,0"],["wQ1","-1,1"]],
+  other:"That move does not follow Black's opening plan.",
+  steps:[
+   {goal:zD[0].goal,hint:zD[0].hint,other:zD[0].other,replies:zD[0].replies,
+    then:{branches:[
+     {name:"Ant from below",move:["wA1","-1,2"],why:"White brings in an ant below the queen to attack yours.",
+      steps:[zD[1],zD[2]]},
+     {name:"Ant from above",move:["wA1","0,-1"],why:"White's ant comes in on the top side, nearer your queen.",
+      steps:[
+       {goal:zD[1].goal,hint:zD[1].hint,other:zD[1].other,replies:zD[1].replies,
+        then:{move:["wA1","2,-2"],why:"White's ant pins your queen from the top side. That is normal in a Z Opening; your hopper beside her is what matters."}},
+       {goal:"Move 3: get an ant into play.",
+        hint:"Ants are the best defenders of the whole hive. Bring one in and keep your hopper where it is. White's ant sits on a different side this time.",
+        other:"Bring in an ant while your hopper stays next to the queen.",
+        replies:[
+         {name:"Ant into play",verdict:"best",moves:[["bA1","1,1"],["bA1","3,0"],["bA1","2,1"],["bA1","3,-1"]],why:"A free ant can run round the hive to pin White's attackers or block an attack (p. 30). With White's ant at (2,-2), (3,-1) is open to you too."},
+         {name:"Another new bug",verdict:"playable",moves:[["bS1","3,0"],["bG3","3,0"],["bB1","3,0"]],why:"Developing is fine, but an ant gives Black the most mobility to answer White's attack."},
+         {name:"Pull the defender away",verdict:"weak",moves:[["bG2","-1,0"]],why:"Your hopper leaves the queen, so she loses her defender, and you spend a tempo moving a bug twice."}]}]}]}}
+  ]});
+}
 if(typeof module!=="undefined") module.exports=Openers;

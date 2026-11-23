@@ -24,6 +24,9 @@ const StudyBoard = (() => {
    const interactive=(key,label)=>state.readOnly?' role="img" aria-label="'+label+'"':' role="button" tabindex="0" data-cell="'+key+'" aria-label="'+label+'"';
    function spot(k){
      const highlight=ans?.to===k;
+     // Pillbug-ability target (expansion games only: base moves never carry `by`): violet, with a lift arrow.
+     const by=opts.find(m=>m.to===k&&m.by&&!opts.some(n=>n.to===k&&!n.by))?.by;
+     if(by)return '<g class="destination ability" transform="'+pp(k)+'"'+interactive(k,'Move '+legend(selected)+' with '+legend(by).toLowerCase()+' to '+k)+'><title>Move with the '+(by[1]==="M"?"mosquito (as a pillbug)":"pillbug")+'</title><polygon class="spot-outline" points="'+pts(r-3)+'" stroke="#d2b8ff" fill="#8a6fc0" fill-opacity=".3" stroke-width="2.2" stroke-dasharray="2 3"/><path d="M0 7V-6M-5-1 0-6 5-1" fill="none" stroke="#efe2ff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></g>';
      return '<g class="destination" transform="'+pp(k)+'"'+interactive(k,'Move '+legend(selected)+' to '+k)+'><polygon class="spot-outline" points="'+pts(r-3)+'" stroke="'+(highlight?'#ffcd52':'#a8d0a7')+'" fill="'+(highlight?'#c5a043':'#709d72')+'" fill-opacity=".23" stroke-width="1.8" stroke-dasharray="4 3"/><circle r="'+(highlight?6:4.8)+'" fill="'+(highlight?'#ffda70':'#d2e8bc')+'"/></g>';
    }
    for(const k of ends)if(!board[k])html+=spot(k);
